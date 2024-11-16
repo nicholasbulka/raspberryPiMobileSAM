@@ -10,29 +10,26 @@ import time
 import os
 import io
 import base64
-from flask import Flask, render_template, jsonify, request, send_from_directory
+from flask import Flask, render_template_string, jsonify, request
 import threading
 import colorsys
 print("Basic imports completed")
 
 print("Importing effects module...")
-from effects import apply_effect, EFFECTS_LIST
+from effects import apply_effect, get_javascript_code, EFFECTS_LIST
 print("Effects module imported successfully")
 
-# Initialize Flask app with template and static file handling
-app = Flask(__name__, 
-    template_folder='templates',
-    static_folder='static',
-    static_url_path='/static'
-)
+# Initialize Flask app
+print("Initializing Flask app...")
+app = Flask(__name__)
 print("Flask app initialized")
 
 # Global variables for shared state
 frame_lock = threading.Lock()
 effect_lock = threading.Lock()
 current_frame = None
-raw_processed_frame = None
-processed_frame = None
+raw_processed_frame = None  # Stores the raw segmentation result
+processed_frame = None      # Stores the effect-processed frame
 current_masks = None
 current_effect = None
 effect_params = {}
@@ -54,11 +51,181 @@ def encode_frame_to_base64(frame):
 @app.route('/')
 def index():
     print("Rendering index page...")
-    return render_template('index.html', effects=EFFECTS_LIST)
-
-@app.route('/api/effects')
-def get_effects():
-    return jsonify(EFFECTS_LIST)
+    return render_template_string('''
+    <!DOCTYPE html>
+    <html>
+        <head>
+            <title>MobileSAM Camera Stream</title>
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    margin: 20px;
+                    background: #1a1a1a;
+                    color: #fff;
+                }
+                .container {
+                    position: relative;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: calc(100vh - 200px);
+                }
+                .stream {
+                    position: absolute;
+                    text-align: center;
+                    background: #2a2a2a;
+                    padding: 20px;
+                    border-radius: 10px;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+                }
+                .stream.raw {
+                    display: none;
+                    z-index: 1;
+                }
+                .stream.processed {
+                    z-index: 2;
+                }
+                .canvas-container {
+                    position: relative;
+                    margin: 10px;
+                }
+                canvas {
+                    max-width: 640px;
+                    border: 2px solid #333;
+                    background: #000;
+                    border-radius: 5px;
+                }
+                .controls {
+                    margin: 20px auto;
+                    padding: 20px;
+                    background: #333;
+                    border-radius: 10px;
+                    max-width: 800px;
+                }
+                .effect-btn, .toggle-btn {
+                    padding: 10px 20px;
+                    margin: 5px;
+                    background: #444;
+                    color: #fff;
+                    border: none;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    transition: all 0.3s ease;
+                    font-size: 14px;
+                }
+                .effect-btn:hover, .toggle-btn:hover {
+                    background: #666;
+                    transform: translateY(-2px);
+                }
+                .effect-btn.active, .toggle-btn.active {
+                    background: #0066cc;
+                    box-shadow: 0 0 10px rgba(0,102,204,0.5);
+                }
+                .slider-container {
+                    margin: 15px 0;
+                    background: #2a2a2a;
+                    padding: 10px 20px;
+                    border-radius: 5px;
+                }
+                .slider-container label {
+                    display: inline-block;
+                    width: 120px;
+                    margin-right: 10px;
+                }
+                .slider {
+                    width: 200px;
+                    vertical-align: middle;
+                }
+                #global-controls {
+                    margin-bottom: 20px;
+                    padding: 10px;
+                    border-bottom: 1px solid #444;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                #effect-buttons {
+                    margin-bottom: 20px;
+                    padding: 10px;
+                    border-bottom: 1px solid #444;
+                }
+                #effect-params {
+                    padding: 10px;
+                }
+                .title {
+                    text-align: center;
+                    color: #fff;
+                    margin-bottom: 30px;
+                    font-size: 24px;
+                    text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                }
+                .show-raw-btn {
+                    padding: 8px 16px;
+                    background: #555;
+                    border: none;
+                    color: white;
+                    border-radius: 4px;
+                    cursor: pointer;
+                }
+                .show-raw-btn:hover {
+                    background: #666;
+                }
+                .show-raw-btn.active {
+                    background: #0066cc;
+                }
+            </style>
+            <script>
+            ''' + get_javascript_code() + '''
+            </script>
+        </head>
+        <body>
+            <h1 class="title">MobileSAM Stream with Effects</h1>
+            <div class="controls">
+                <div id="global-controls">
+                    <div>
+                        <h2 style="margin-top: 0; display: inline-block; margin-right: 20px;">Global Controls</h2>
+                        <button id="toggle-8bit" class="toggle-btn">8-bit Mode</button>
+                    </div>
+                    <button id="toggle-raw" class="show-raw-btn">Show Raw Feed</button>
+                </div>
+                <div id="effect-controls">
+                    <h2 style="margin-top: 0;">Visual Effects</h2>
+                    <div id="effect-buttons"></div>
+                    <div id="effect-params"></div>
+                </div>
+            </div>
+            <div class="container">
+                <div class="stream raw">
+                    <h2>Raw Feed</h2>
+                    <div class="canvas-container">
+                        <canvas id="rawCanvas"></canvas>
+                    </div>
+                </div>
+                <div class="stream processed">
+                    <h2>Processed Feed</h2>
+                    <div class="canvas-container">
+                        <canvas id="processedCanvas"></canvas>
+                    </div>
+                </div>
+            </div>
+            <script>
+                document.getElementById('toggle-raw').addEventListener('click', function() {
+                    const rawStream = document.querySelector('.stream.raw');
+                    const btn = this;
+                    if (rawStream.style.display === 'none' || !rawStream.style.display) {
+                        rawStream.style.display = 'block';
+                        btn.classList.add('active');
+                        btn.textContent = 'Hide Raw Feed';
+                    } else {
+                        rawStream.style.display = 'none';
+                        btn.classList.remove('active');
+                        btn.textContent = 'Show Raw Feed';
+                    }
+                });
+            </script>
+        </body>
+    </html>
+    ''')
 
 @app.route('/stream')
 def stream():
@@ -120,7 +287,7 @@ def capture_frames(camera_index=0):
                 current_frame = frame
 
             frame_count += 1
-            if frame_count % 30 == 0:
+            if frame_count % 30 == 0:  # Log every 30 frames
                 elapsed = time.time() - start_time
                 print(f"Capture FPS: {frame_count/elapsed:.2f}")
 
@@ -133,6 +300,7 @@ def capture_frames(camera_index=0):
         cap.release()
 
 def generate_visualization(frame, masks, scores):
+    """Generate the base visualization without effects"""
     print("Generating visualization...")
     result = frame.copy()
     frame_height, frame_width = frame.shape[:2]
@@ -146,6 +314,7 @@ def generate_visualization(frame, masks, scores):
             masks, scores, colors = zip(*mask_score_pairs)
 
         for i, (mask, color) in enumerate(zip(masks, colors)):
+            # Resize mask to match frame dimensions
             mask_resized = cv2.resize(
                 mask.astype(np.uint8), 
                 (frame_width, frame_height), 
@@ -201,6 +370,7 @@ def process_frames(predictor):
                         continue
                     frame_to_process = current_frame.copy()
 
+                # Process with MobileSAM
                 frame_small = cv2.resize(frame_to_process, (128, 72))
                 frame_rgb = cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB)
 
@@ -229,6 +399,7 @@ def process_frames(predictor):
                     current_masks = None
                     print("No masks generated")
 
+                # Generate visualization
                 result = generate_visualization(frame_to_process, masks, scores)
 
                 with frame_lock:
@@ -238,7 +409,7 @@ def process_frames(predictor):
                 last_process_time = current_time
                 frames_processed += 1
 
-                if frames_processed % 5 == 0:
+                if frames_processed % 5 == 0:  # Log every 5 frames
                     elapsed = time.time() - start_time
                     print(f"Processing FPS: {frames_processed/elapsed:.2f}")
 
@@ -274,7 +445,7 @@ def apply_effects_loop():
                         processed_frame = result
 
                     effects_applied += 1
-                    if effects_applied % 30 == 0:
+                    if effects_applied % 30 == 0:  # Log every 30 effects
                         elapsed = time.time() - start_time
                         print(f"Effects FPS: {effects_applied/elapsed:.2f}")
 
@@ -316,6 +487,7 @@ def main():
     os.makedirs("weights", exist_ok=True)
     print("Weights directory checked")
 
+    # Load MobileSAM model
     print("Loading MobileSAM model...")
     model_type = "vit_t"
     checkpoint = "weights/mobile_sam.pt"
@@ -343,6 +515,7 @@ def main():
         predictor = SamPredictor(model)
         print("Predictor created")
 
+        # Start threads
         print("\nStarting threads...")
 
         print("Starting capture thread...")
@@ -363,6 +536,7 @@ def main():
         effects_thread.start()
         print("Effects thread started")
 
+        # Start Flask server
         print("\nStarting Flask server...")
         print("Server will be available at http://localhost:5000")
         app.run(host='0.0.0.0', port=5000, threaded=True)
