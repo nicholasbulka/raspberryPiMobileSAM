@@ -1,4 +1,3 @@
-# Initialize Flask app and configuration
 import torch
 print("Starting imports...")
 torch.backends.quantized.engine = 'qnnpack'
@@ -11,7 +10,7 @@ import time
 import os
 import io
 import base64
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_from_directory
 import threading
 import colorsys
 print("Basic imports completed")
@@ -20,7 +19,12 @@ print("Importing effects module...")
 from effects import apply_effect, EFFECTS_LIST
 print("Effects module imported successfully")
 
-app = Flask(__name__)
+# Initialize Flask app with template and static file handling
+app = Flask(__name__, 
+    template_folder='templates',
+    static_folder='static',
+    static_url_path='/static'
+)
 print("Flask app initialized")
 
 # Global variables for shared state
@@ -51,6 +55,10 @@ def encode_frame_to_base64(frame):
 def index():
     print("Rendering index page...")
     return render_template('index.html', effects=EFFECTS_LIST)
+
+@app.route('/api/effects')
+def get_effects():
+    return jsonify(EFFECTS_LIST)
 
 @app.route('/stream')
 def stream():
@@ -116,7 +124,7 @@ def capture_frames(camera_index=0):
                 elapsed = time.time() - start_time
                 print(f"Capture FPS: {frame_count/elapsed:.2f}")
 
-            time.sleep(0.016)  # ~60 FPS max
+            time.sleep(0.033)
 
     except Exception as e:
         print(f"Error in capture thread: {e}")
@@ -167,7 +175,7 @@ def process_frames(predictor):
     frames_processed = 0
     start_time = time.time()
     last_process_time = 0
-    target_interval = 0.033  # Reduced to ~30 FPS for faster updates
+    target_interval = 1.0
 
     print("Waiting for first frame...")
     while current_frame is None:
@@ -184,6 +192,7 @@ def process_frames(predictor):
             current_time = time.time()
 
             if current_time - last_process_time < target_interval:
+                time.sleep(0.1)
                 continue
 
             try:
@@ -269,7 +278,7 @@ def apply_effects_loop():
                         elapsed = time.time() - start_time
                         print(f"Effects FPS: {effects_applied/elapsed:.2f}")
 
-                time.sleep(0.016)  # Reduced to ~60 FPS max
+                time.sleep(0.033)
 
             except Exception as e:
                 print(f"Error in effects loop: {str(e)}")
