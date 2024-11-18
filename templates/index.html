@@ -16,6 +16,7 @@
                 <div>
                     <h2 style="margin-top: 0; display: inline-block; margin-right: 20px;">Global Controls</h2>
                     <button id="toggle-8bit" class="toggle-btn">8-bit Mode</button>
+                    <button id="toggle-debug" class="toggle-btn">Debug Panel</button>
                 </div>
                 <button id="toggle-raw" class="show-raw-btn">Show Raw Feed</button>
             </div>
@@ -43,6 +44,46 @@
             </div>
         </div>
 
+        <!-- Debug Panel -->
+        <div id="debug-panel" class="debug-panel hidden">
+            <div class="debug-header">
+                <h3>MobileSAM Debug Info</h3>
+                <button id="close-debug" class="close-button">&times;</button>
+            </div>
+            <div class="debug-content">
+                <div class="debug-section">
+                    <h4>Active Mask Information</h4>
+                    <div id="active-mask-info" class="json-view"></div>
+                </div>
+                <div class="debug-section">
+                    <h4>All Masks</h4>
+                    <div class="debug-controls">
+                        <button id="collapse-all" class="debug-btn">Collapse All</button>
+                        <button id="expand-all" class="debug-btn">Expand All</button>
+                        <input type="text" id="mask-search" placeholder="Search masks..." class="debug-search">
+                    </div>
+                    <div id="all-masks-info" class="json-view"></div>
+                </div>
+                <div class="debug-section">
+                    <h4>Performance Metrics</h4>
+                    <div id="performance-metrics" class="metrics-view">
+                        <div class="metric">
+                            <span class="metric-label">Processing FPS:</span>
+                            <span class="metric-value" id="processing-fps">-</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Total Masks:</span>
+                            <span class="metric-value" id="total-masks">-</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Average Confidence:</span>
+                            <span class="metric-value" id="avg-confidence">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Load main JavaScript -->
         <script src="/static/js/main.js"></script>
 
@@ -60,6 +101,18 @@
                     btn.classList.remove('active');
                     btn.textContent = 'Show Raw Feed';
                 }
+            });
+
+            document.getElementById('toggle-debug').addEventListener('click', function() {
+                const debugPanel = document.getElementById('debug-panel');
+                debugPanel.classList.toggle('hidden');
+                this.classList.toggle('active');
+            });
+
+            document.getElementById('close-debug').addEventListener('click', function() {
+                const debugPanel = document.getElementById('debug-panel');
+                debugPanel.classList.add('hidden');
+                document.getElementById('toggle-debug').classList.remove('active');
             });
         </script>
     </body>

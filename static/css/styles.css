@@ -1,297 +1,433 @@
 /* Base styles */
 body {
-    font-family: Arial, sans-serif;
-    margin: 20px;
-    background: #1a1a1a;
-    color: #fff;
-    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background-color: #f5f5f5;
+    color: #333;
 }
 
 .title {
     text-align: center;
-    color: #fff;
-    margin-bottom: 30px;
-    font-size: 24px;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    color: #2c3e50;
+    margin-bottom: 20px;
 }
 
-/* Container and layout */
+/* Container layouts */
 .container {
-    position: relative;
     display: flex;
     justify-content: center;
-    align-items: center;
     gap: 20px;
-    height: calc(100vh - 200px);
-}
-
-.container.side-by-side {
-    flex-direction: row;
+    margin-top: 20px;
     flex-wrap: wrap;
 }
 
 .stream {
-    position: relative;
-    text-align: center;
-    background: #2a2a2a;
-    padding: 20px;
-    border-radius: 10px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    transition: all 0.3s ease;
-    flex: 1;
-    min-width: 300px;
+    background: #fff;
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.stream.raw {
-    display: block;
+.stream h2 {
+    margin-top: 0;
+    color: #2c3e50;
+    font-size: 1.2em;
 }
 
-/* Canvas container */
+/* Canvas styling */
 .canvas-container {
     position: relative;
-    margin: 0;
-    transition: all 0.3s ease;
+    display: inline-block;
 }
 
 canvas {
-    width: 100%;
-    max-width: 640px;
-    border: 2px solid #333;
-    background: #000;
-    border-radius: 5px;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    image-rendering: pixelated;
-    image-rendering: crisp-edges;
-    -ms-interpolation-mode: nearest-neighbor;
-}
-
-/* Fullscreen styles */
-.stream:-webkit-full-screen,
-.stream:-moz-full-screen,
-.stream:-ms-fullscreen,
-.stream:fullscreen {
-    width: 100vw !important;
-    height: 100vh !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    background: #000 !important;
-    border-radius: 0 !important;
-}
-
-.stream:-webkit-full-screen .canvas-container,
-.stream:-moz-full-screen .canvas-container,
-.stream:-ms-fullscreen .canvas-container,
-.stream:fullscreen .canvas-container {
-    width: 100vw !important;
-    height: 100vh !important;
-    margin: 0 !important;
-}
-
-.stream:-webkit-full-screen canvas,
-.stream:-moz-full-screen canvas,
-.stream:-ms-fullscreen canvas,
-.stream:fullscreen canvas {
-    width: 100vw !important;
-    height: 100vh !important;
-    max-width: none !important;
-    max-height: none !important;
-    border: none !important;
-    border-radius: 0 !important;
-    object-fit: fill !important;
-}
-
-/* Controls section */
-.controls {
-    margin: 20px auto;
-    padding: 20px;
-    background: #333;
-    border-radius: 10px;
-    max-width: 800px;
-    transition: opacity 0.3s ease;
-}
-
-.controls.hidden {
-    opacity: 0;
-    pointer-events: none;
-}
-
-/* Buttons */
-.effect-btn,
-.toggle-btn {
-    padding: 10px 20px;
-    margin: 5px;
-    background: #444;
-    color: #fff;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    font-size: 14px;
-}
-
-.effect-btn:hover,
-.toggle-btn:hover {
-    background: #666;
-    transform: translateY(-2px);
-}
-
-.effect-btn.active,
-.toggle-btn.active {
-    background: #0066cc;
-    box-shadow: 0 0 10px rgba(0,102,204,0.5);
-}
-
-/* Slider controls */
-.slider-container {
-    margin: 15px 0;
-    background: #2a2a2a;
-    padding: 10px 20px;
-    border-radius: 5px;
-}
-
-.slider-container label {
-    display: inline-block;
-    width: 120px;
-    margin-right: 10px;
-}
-
-.slider {
-    width: 200px;
-    vertical-align: middle;
-}
-
-/* Global controls section */
-#global-controls {
-    margin-bottom: 20px;
-    padding: 10px;
-    border-bottom: 1px solid #444;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-#effect-buttons {
-    margin-bottom: 20px;
-    padding: 10px;
-    border-bottom: 1px solid #444;
-}
-
-#effect-params {
-    padding: 10px;
-}
-
-/* Raw feed toggle button */
-.show-raw-btn {
-    padding: 8px 16px;
-    background: #555;
-    border: none;
-    color: white;
     border-radius: 4px;
     cursor: pointer;
+    transition: transform 0.2s ease;
+    max-width: 100%;
+    height: auto;
 }
 
-.show-raw-btn:hover {
-    background: #666;
+canvas:hover {
+    transform: scale(1.01);
 }
 
-.show-raw-btn.active {
-    background: #0066cc;
+/* Control panel styling */
+.controls {
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-/* Fullscreen button */
+#effect-controls {
+    margin-top: 20px;
+}
+
+/* Button styling */
+button {
+    background: #3498db;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.2s;
+}
+
+button:hover {
+    background: #2980b9;
+}
+
+button.active {
+    background: #2ecc71;
+}
+
+.effect-btn {
+    margin: 5px;
+}
+
 .fullscreen-button {
     position: absolute;
     bottom: 10px;
     right: 10px;
-    padding: 8px 16px;
     background: rgba(0, 0, 0, 0.5);
     color: white;
     border: none;
+    padding: 5px 10px;
     border-radius: 4px;
     cursor: pointer;
-    z-index: 1000;
+    font-size: 12px;
     opacity: 0;
-    transition: opacity 0.3s ease;
+    transition: opacity 0.3s;
 }
 
 .canvas-container:hover .fullscreen-button {
     opacity: 1;
 }
 
-.fullscreen-button:hover {
-    background: rgba(0, 0, 0, 0.7);
+/* Slider styling */
+.slider-container {
+    margin: 10px 0;
 }
 
-/* Hide fullscreen button in fullscreen mode */
-.stream:-webkit-full-screen .fullscreen-button,
-.stream:-moz-full-screen .fullscreen-button,
-.stream:-ms-fullscreen .fullscreen-button,
-.stream:fullscreen .fullscreen-button {
-    opacity: 0;
+.slider {
+    width: 200px;
+    margin: 0 10px;
 }
 
-/* Performance monitor */
+/* Fullscreen mode */
+.fullscreen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 1000;
+    background: black;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.fullscreen canvas {
+    max-width: 100vw;
+    max-height: 100vh;
+    width: auto;
+    height: auto;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* FPS Display */
 .fps-display {
     position: fixed;
     top: 10px;
     right: 10px;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.7);
     color: white;
-    padding: 5px;
-    border-radius: 3px;
-    font-family: monospace;
-    z-index: 1001;
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 14px;
+    z-index: 1000;
 }
 
-/* Hide stream title in fullscreen */
-.stream:-webkit-full-screen h2,
-.stream:-moz-full-screen h2,
-.stream:-ms-fullscreen h2,
-.stream:fullscreen h2 {
-    display: none !important;
+/* Debug Panel Styles */
+.debug-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 400px;
+    height: 100vh;
+    background: #fff;
+    box-shadow: -2px 0 5px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    transition: transform 0.3s ease;
 }
 
-/* Remove all spacing in fullscreen */
-.stream:fullscreen * {
-    margin: 0 !important;
-    padding: 0 !important;
+.debug-panel.hidden {
+    transform: translateX(100%);
 }
 
-/* Ensure crisp rendering in all browsers */
-* {
-    image-rendering: optimizeSpeed;
-    image-rendering: -moz-crisp-edges;
-    image-rendering: -webkit-optimize-contrast;
-    image-rendering: optimize-contrast;
-    image-rendering: pixelated;
-    -ms-interpolation-mode: nearest-neighbor;
+.debug-header {
+    padding: 15px;
+    background: #2c3e50;
+    color: white;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.debug-header h3 {
+    margin: 0;
+    font-size: 1.1em;
+}
+
+.debug-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 15px;
+}
+
+.debug-section {
+    margin-bottom: 20px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    padding: 15px;
+}
+
+.debug-section h4 {
+    margin-top: 0;
+    color: #2c3e50;
+    font-size: 1em;
+    margin-bottom: 10px;
+}
+
+.json-view {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    color: #333;
+    background: #fff;
+    border-radius: 4px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    overflow-x: auto;
+}
+
+.json-view pre {
+    margin: 0;
+    white-space: pre-wrap;
+}
+
+.mask-entry {
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.mask-header {
+    padding: 8px;
+    background: #f1f3f5;
+    border-bottom: 1px solid #ddd;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+}
+
+.mask-content {
+    padding: 8px;
+    display: none;
+}
+
+.mask-toggle {
+    background: none;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    padding: 0 8px;
+}
+
+.debug-controls {
+    margin-bottom: 10px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.debug-btn {
+    background: #6c757d;
+    font-size: 12px;
+    padding: 4px 8px;
+}
+
+.debug-search {
+    flex: 1;
+    padding: 6px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.metrics-view {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+}
+
+.metric {
+    background: #fff;
+    padding: 10px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+}
+
+.metric-label {
+    font-size: 12px;
+    color: #666;
+    display: block;
+}
+
+.metric-value {
+    font-size: 16px;
+    font-weight: 500;
+    color: #2c3e50;
+}
+
+.close-button {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 5px;
+}
+
+.close-button:hover {
+    background: none;
+    color: #ddd;
+}
+
+.debug-resize-handle {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 5px;
+    cursor: ew-resize;
+    background: transparent;
+}
+
+.debug-resize-handle:hover {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+/* Mask visualization styles */
+.mask-visualization {
+    margin-top: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.mask-visualization canvas {
+    width: 100%;
+    height: auto;
+}
+
+/* Animation for debug panel */
+@keyframes slideIn {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+}
+
+@keyframes slideOut {
+    from { transform: translateX(0); }
+    to { transform: translateX(100%); }
+}
+
+.debug-panel.animate-in {
+    animation: slideIn 0.3s ease forwards;
+}
+
+.debug-panel.animate-out {
+    animation: slideOut 0.3s ease forwards;
 }
 
 /* Responsive adjustments */
 @media (max-width: 1200px) {
-    .container.side-by-side {
-        flex-direction: column;
-        align-items: center;
-    }
-
-    .stream {
-        width: 100%;
-        max-width: 640px;
+    .debug-panel {
+        width: 350px;
     }
 }
 
 @media (max-width: 768px) {
-    body {
-        margin: 10px;
+    .debug-panel {
+        width: 100%;
     }
-
+    
+    .container {
+        flex-direction: column;
+    }
+    
+    .stream {
+        width: 100%;
+        margin-bottom: 20px;
+    }
+    
     .controls {
-        margin: 10px;
-        padding: 10px;
+        padding: 15px;
+    }
+    
+    .slider {
+        width: 100%;
+    }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+    body {
+        background-color: #1a1a1a;
+        color: #fff;
     }
 
-    .slider {
-        width: 150px;
+    .controls, .stream, .debug-panel {
+        background: #2d2d2d;
+    }
+
+    .json-view, .debug-section {
+        background: #333;
+        color: #fff;
+        border-color: #444;
+    }
+
+    .mask-header {
+        background: #383838;
+        border-color: #444;
+    }
+
+    .debug-search {
+        background: #333;
+        color: #fff;
+        border-color: #444;
+    }
+
+    .metric {
+        background: #333;
+        border-color: #444;
+    }
+
+    .metric-value {
+        color: #fff;
     }
 }

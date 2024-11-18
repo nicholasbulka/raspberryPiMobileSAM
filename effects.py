@@ -3,8 +3,112 @@ import cv2
 import json
 import time
 from scipy.ndimage import binary_dilation, binary_erosion
+from dataclasses import dataclass
+from typing import List, Optional, Dict, Any
+import random
 
 print("Loading effects module...")
+
+@dataclass
+class MaskState:
+    mask_index: int
+    phase: str  # 'growing' or 'shrinking'
+    size: int
+    wall_touches: int
+    original_mask: np.ndarray
+
+class MaskAnimator:
+    def __init__(self):
+        self.current_mask_state: Optional[MaskState] = None
+        self.masks: List[np.ndarray] = []
+        self.mask_metadata: List[Dict[str, Any]] = []
+        self.last_switch_time = 0
+        self.switch_interval = 2.0  # Time before switching masks
+
+    def update_masks(self, masks: List[np.ndarray], metadata: List[Dict[str, Any]]):
+        self.masks = masks
+        self.mask_metadata = metadata
+        if not self.current_mask_state and masks:
+            self.select_new_mask()
+
+    def select_new_mask(self):
+        if not self.masks:
+            self.current_mask_state = None
+            return
+
+        mask_index = random.randint(0, len(self.masks) - 1)
+        self.current_mask_state = MaskState(
+            mask_index=mask_index,
+            phase='growing',
+            size=1,
+            wall_touches=0,
+            original_mask=self.masks[mask_index].copy()
+        )
+        self.last_switch_time = time.time()
+
+    def check_wall_touches(self, mask: np.ndarray) -> int:
+        h, w = mask.shape
+        touches = 0
+        if np.any(mask[0, :]):  # Top wall
+            touches += 1
+        if np.any(mask[-1, :]):  # Bottom wall
+            touches += 1
+        if np.any(mask[:, 0]):  # Left wall
+            touches += 1
+        if np.any(mask[:, -1]):  # Right wall
+            touches += 1
+        return touches
+
+    def get_current_state(self) -> Dict[str, Any]:
+        if not self.current_mask_state:
+            return {"active_mask": None}
+        
+        mask_meta = self.mask_metadata[self.current_mask_state.mask_index]
+        return {
+            "active_mask": self.current_mask_state.mask_index,
+            "phase": self.current_mask_state.phase,
+            "size": self.current_mask_state.size,
+            "wall_touches": self.current_mask_state.wall_touches,
+            "score": mask_meta.get("score", 0),
+            "area": float(np.sum(self.current_mask_state.original_mask)),
+            "stability_score": mask_meta.get("stability_score", 0)
+        }
+
+    def process_frame(self, frame: np.ndarray) -> np.ndarray:
+        if not self.current_mask_state or not self.masks:
+            return frame
+
+        result = frame.copy()
+        current_time = time.time()
+        
+        if current_time - self.last_switch_time > self.switch_interval:
+            if self.current_mask_state.phase == 'shrinking' and self.current_mask_state.size <= 1:
+                self.select_new_mask()
+                return frame
+
+        mask = self.current_mask_state.original_mask.copy()
+        
+        if self.current_mask_state.phase == 'growing':
+            grown_mask = binary_dilation(mask, iterations=self.current_mask_state.size)
+            wall_touches = self.check_wall_touches(grown_mask)
+            
+            if wall_touches >= 3:
+                self.current_mask_state.phase = 'shrinking'
+            else:
+                self.current_mask_state.size += 1
+                self.current_mask_state.wall_touches = wall_touches
+                result[grown_mask] = np.clip(frame[grown_mask] * 1.2, 0, 255).astype(np.uint8)
+                
+        else:  # shrinking
+            if self.current_mask_state.size > 1:
+                self.current_mask_state.size -= 1
+                grown_mask = binary_dilation(mask, iterations=self.current_mask_state.size)
+                result[grown_mask] = np.clip(frame[grown_mask] * 1.2, 0, 255).astype(np.uint8)
+
+        return result
+
+# Global animator instance
+mask_animator = MaskAnimator()
 
 EFFECTS_LIST = [
     {
@@ -48,7 +152,7 @@ EFFECTS_LIST = [
         'params': [
             {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 6, 'label': 'Pixelation'},
             {'name': 'speed', 'min': 1, 'max': 10, 'default': 5, 'label': 'Speed'},
-            {'name': 'strength', 'min': 1, 'max': 5, 'default': 2, 'label': 'Strength'}
+            {'name': 'switch_interval', 'min': 1, 'max': 10, 'default': 2, 'label': 'Switch Interval'}
         ]
     },
     {
@@ -144,7 +248,6 @@ def apply_glitch(frame, params):
         height, width = frame.shape[:2]
         result = frame.copy()
 
-        # Time-based seed for consistent glitch pattern over small time windows
         seed = int(time.time() * speed)
         np.random.seed(seed)
 
@@ -160,7 +263,6 @@ def apply_glitch(frame, params):
                 else:
                     result[y:y+h, :offset] = safe_array_access(result, (slice(y, y+h), slice(-offset, None)))
 
-            # Random color channel shift
             channel = np.random.randint(0, 3)
             result[y:y+h, :, channel] = np.roll(result[y:y+h, :, channel], offset, axis=1)
 
@@ -169,29 +271,23 @@ def apply_glitch(frame, params):
         print(f"Error in glitch effect: {e}")
         return frame
 
-def apply_grow_masks(frame, masks, params):
-    if masks is None:
+def apply_grow_masks(frame, masks, params, metadata=None):
+    if masks is None or not masks:
         return frame
 
     try:
         pixelation = params.get('pixelation', 6)
-        speed = params.get('speed', 5)
-        strength = params.get('strength', 2)
-
+        switch_interval = params.get('switch_interval', 2)
+        
         frame = apply_pixelation(frame, pixelation)
-        height, width = frame.shape[:2]
-        result = frame.copy()
-
-        # Time-based variation
-        time_factor = (np.sin(time.time() * speed) + 1) / 2  # 0 to 1
-        current_strength = int(strength * 2 * time_factor) + 1
-
-        for mask in masks:
-            mask_resized = cv2.resize(mask.astype(np.uint8), (width, height)) > 0
-            grown_mask = binary_dilation(mask_resized, iterations=current_strength)
-            result[grown_mask] = np.clip(frame[grown_mask] * 1.2, 0, 255).astype(np.uint8)
-
-        return result
+        mask_animator.switch_interval = switch_interval
+        
+        if metadata is None:
+            metadata = [{"score": 1.0} for _ in masks]
+        
+        mask_animator.update_masks(masks, metadata)
+        return mask_animator.process_frame(frame)
+        
     except Exception as e:
         print(f"Error in grow_masks effect: {e}")
         return frame
@@ -209,8 +305,7 @@ def apply_shrink_masks(frame, masks, params):
         height, width = frame.shape[:2]
         result = frame.copy()
 
-        # Time-based variation
-        time_factor = (np.sin(time.time() * speed) + 1) / 2  # 0 to 1
+        time_factor = (np.sin(time.time() * speed) + 1) / 2
         current_strength = int(strength * 2 * time_factor) + 1
 
         for mask in masks:
@@ -222,8 +317,7 @@ def apply_shrink_masks(frame, masks, params):
     except Exception as e:
         print(f"Error in shrink_masks effect: {e}")
         return frame
-
-def apply_effect(frame, effect_name, params, masks=None):
+def apply_effect(frame, effect_name, params, masks=None, metadata=None):
     try:
         print(f"Applying effect: {effect_name} with params: {params}")
         
@@ -237,7 +331,7 @@ def apply_effect(frame, effect_name, params, masks=None):
         elif effect_name == 'glitch':
             return apply_glitch(frame, params)
         elif effect_name == 'grow':
-            return apply_grow_masks(frame, masks, params)
+            return apply_grow_masks(frame, masks, params, metadata)
         elif effect_name == 'shrink':
             return apply_shrink_masks(frame, masks, params)
         
@@ -248,246 +342,6 @@ def apply_effect(frame, effect_name, params, masks=None):
 
 def get_javascript_code():
     """Generate JavaScript code for the web interface"""
-    js_code = '''
-let currentEffect = 'none';
-let effectParams = {};
-let rawCanvas, processedCanvas, rawCtx, processedCtx;
-let effects = ''' + json.dumps(EFFECTS_LIST) + ''';
-
-function setupCanvas(canvas) {
-    canvas.width = 640;
-    canvas.height = 360;
-    return canvas.getContext('2d');
-}
-
-async function updateStreams() {
-    try {
-        const response = await fetch('/stream');
-        if (!response.ok) {
-            console.error('Stream response not ok:', response.status);
-            return;
-        }
-        
-        const data = await response.json();
-        
-        if (data.raw && data.processed) {
-            const rawImg = new Image();
-            rawImg.onload = () => rawCtx.drawImage(rawImg, 0, 0);
-            rawImg.src = 'data:image/jpeg;base64,' + data.raw;
-            
-            const processedImg = new Image();
-            processedImg.onload = () => processedCtx.drawImage(processedImg, 0, 0);
-            processedImg.src = 'data:image/jpeg;base64,' + data.processed;
-        }
-    } catch (error) {
-        console.error('Error updating streams:', error);
-    }
-}
-
-function setupEffectControls() {
-    const buttonContainer = document.getElementById('effect-buttons');
-    buttonContainer.innerHTML = ''; // Clear existing buttons
-    
-    effects.forEach(effect => {
-        const button = document.createElement('button');
-        button.textContent = effect.label;
-        button.className = 'effect-btn';
-        if (effect.name === currentEffect) {
-            button.classList.add('active');
-        }
-        button.onclick = () => setEffect(effect.name);
-        buttonContainer.appendChild(button);
-    });
-    
-    updateParamControls();
-}
-
-function updateParamControls() {
-    const paramContainer = document.getElementById('effect-params');
-    paramContainer.innerHTML = '';
-    
-    const effect = effects.find(e => e.name === currentEffect);
-    if (!effect) return;
-    
-    if (effect.params) {
-        effect.params.forEach(param => {
-            const container = document.createElement('div');
-            container.className = 'slider-container';
-            
-            const label = document.createElement('label');
-            label.textContent = param.label;
-            
-            const value = document.createElement('span');
-            value.style.marginLeft = '10px';
-            value.style.minWidth = '30px';
-            value.style.display = 'inline-block';
-            
-            const slider = document.createElement('input');
-            slider.type = 'range';
-            slider.min = param.min;
-            slider.max = param.max;
-            slider.value = effectParams[param.name] || param.default;
-            slider.className = 'slider';
-            
-            value.textContent = slider.value;
-            
-            slider.oninput = () => {
-                value.textContent = slider.value;
-                effectParams[param.name] = parseInt(slider.value);
-                fetch('/effect_params', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(effectParams)
-                });
-            };
-            
-            container.appendChild(label);
-            container.appendChild(slider);
-            container.appendChild(value);
-            paramContainer.appendChild(container);
-        });
-    }
-}
-
-function setEffect(effectName) {
-    console.log('Setting effect:', effectName);
-    currentEffect = effectName;
-    
-    // Update button states
-    document.querySelectorAll('.effect-btn').forEach(btn => {
-        const effect = effects.find(e => e.label === btn.textContent);
-        btn.classList.toggle('active', effect && effect.name === effectName);
-    });
-    
-    // Reset parameters
-    effectParams = {};
-    updateParamControls();
-    
-    // Notify server
-    fetch(`/effect/${effectName}`, {
-        method: 'POST'
-    });
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    // Initialize canvases
-    rawCanvas = document.getElementById('rawCanvas');
-    processedCanvas = document.getElementById('processedCanvas');
-    rawCtx = setupCanvas(rawCanvas);
-processedCtx = setupCanvas(processedCanvas);
-    
-    // Setup controls
-    setupEffectControls();
-    
-    // Start stream updates
-    setInterval(updateStreams, 50);  // Increased update rate for smoother display
-    
-    // Add event listener for 8-bit toggle button
-    const toggle8bitBtn = document.getElementById('toggle-8bit');
-    if (toggle8bitBtn) {
-        toggle8bitBtn.addEventListener('click', () => {
-            effectParams['8bit'] = !effectParams['8bit'];
-            toggle8bitBtn.classList.toggle('active', effectParams['8bit']);
-            fetch('/effect_params', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(effectParams)
-            });
-        });
-    }
-    
-    // Initialize parameters for the default effect
-    const defaultEffect = effects.find(e => e.name === 'none');
-    if (defaultEffect && defaultEffect.params) {
-        defaultEffect.params.forEach(param => {
-            effectParams[param.name] = param.default;
-        });
-        // Send initial parameters to server
-        fetch('/effect_params', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(effectParams)
-        });
-    }
-    
-    // Add keyboard shortcuts for effects
-    document.addEventListener('keydown', (event) => {
-        const key = event.key.toLowerCase();
-        if (key === 'n') setEffect('none');
-        else if (key === 'm') setEffect('melt');
-        else if (key === 'w') setEffect('wave');
-        else if (key === 'g') setEffect('glitch');
-        else if (key === '+') setEffect('grow');
-        else if (key === '-') setEffect('shrink');
-    });
-    
-    // Add mouse wheel handler for adjusting pixelation
-    document.addEventListener('wheel', (event) => {
-        if (event.ctrlKey || event.metaKey) {
-            event.preventDefault();
-            const currentEffect = effects.find(e => e.name === currentEffect);
-            if (currentEffect && currentEffect.params) {
-                const pixelation = effectParams['pixelation'] || 6;
-                const newValue = event.deltaY > 0 ? 
-                    Math.min(pixelation + 1, 20) : 
-                    Math.max(pixelation - 1, 1);
-                effectParams['pixelation'] = newValue;
-                updateParamControls();
-                fetch('/effect_params', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(effectParams)
-                });
-            }
-        }
-    }, { passive: false });
-});
-
-// Helper function to format parameter values
-function formatParamValue(value, param) {
-    if (param.name === 'pixelation') return value + 'px';
-    if (param.name.includes('speed')) return value + 'x';
-    if (param.name === 'amplitude') return value + 'px';
-    if (param.name === 'frequency') return value + 'hz';
-    return value;
-}
-
-// Performance monitoring
-let lastFrameTime = performance.now();
-let frameCount = 0;
-let fpsDisplay = null;
-
-function updateFPS() {
-    frameCount++;
-    const currentTime = performance.now();
-    const elapsed = currentTime - lastFrameTime;
-    
-    if (elapsed >= 1000) {
-        const fps = (frameCount / elapsed) * 1000;
-        if (!fpsDisplay) {
-            fpsDisplay = document.createElement('div');
-            fpsDisplay.style.position = 'fixed';
-            fpsDisplay.style.top = '10px';
-            fpsDisplay.style.right = '10px';
-            fpsDisplay.style.background = 'rgba(0,0,0,0.5)';
-            fpsDisplay.style.color = 'white';
-            fpsDisplay.style.padding = '5px';
-            fpsDisplay.style.borderRadius = '3px';
-            document.body.appendChild(fpsDisplay);
-        }
-        fpsDisplay.textContent = `FPS: ${fps.toFixed(1)}`;
-        frameCount = 0;
-        lastFrameTime = currentTime;
-    }
-}
-
-// Add updateFPS to the animation loop
-function animate() {
-    updateFPS();
-    requestAnimationFrame(animate);
-}
-animate();
-''';
-    return js_code
+    return json.dumps(EFFECTS_LIST)
 
 print("Effects module loaded successfully")
