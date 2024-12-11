@@ -1,0 +1,9 @@
+Metadata-Version: 2.1
+Name: sam_app
+Version: 0.1.0
+Requires-Python: >=3.8
+Requires-Dist: flask
+Requires-Dist: numpy
+Requires-Dist: opencv-python
+Requires-Dist: torch
+Requires-Dist: psutil

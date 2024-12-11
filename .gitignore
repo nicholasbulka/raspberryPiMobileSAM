@@ -1,2 +1,4 @@
 lcollated.txt
 __pycache__
+*.log
+.pyc

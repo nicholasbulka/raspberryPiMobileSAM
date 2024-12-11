@@ -1,0 +1,264 @@
+/* Base styling for the entire application */
+:root {
+    /* Core theme colors */
+    --primary-color: #2c3e50;
+    --secondary-color: #34495e;
+    --accent-color: #3498db;
+    --success-color: #27ae60;
+    --warning-color: #f39c12;
+    --error-color: #c0392b;
+    
+    /* UI element colors */
+    --bg-color: #f5f6fa;
+    --text-color: #2c3e50;
+    --border-color: #dcdde1;
+    
+    /* Metrics and debug colors */
+    --metric-good: #27ae60;
+    --metric-warning: #f39c12;
+    --metric-error: #e74c3c;
+}
+
+/* Base elements */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+}
+
+/* Header styling */
+.title {
+    text-align: center;
+    color: var(--primary-color);
+    margin-bottom: 20px;
+    font-size: 24px;
+}
+
+/* Control panel styling */
+.controls {
+    background-color: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
+}
+
+/* Stream container styling */
+.container {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.stream {
+    background-color: white;
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Canvas styling */
+.canvas-container {
+    position: relative;
+    width: fit-content;
+}
+
+canvas {
+    border-radius: 4px;
+    cursor: pointer;
+    transition: transform 0.2s ease;
+}
+
+canvas:hover {
+    transform: scale(1.01);
+}
+
+/* Button styling */
+button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    background-color: var(--accent-color);
+    color: white;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+button:hover {
+    background-color: #2980b9;
+}
+
+button.active {
+    background-color: var(--success-color);
+}
+
+/* Effect controls */
+#effect-buttons {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 15px;
+}
+
+.effect-btn {
+    min-width: 100px;
+}
+
+/* Slider styling */
+.slider-container {
+    margin: 10px 0;
+}
+
+.slider {
+    width: 200px;
+    margin: 0 10px;
+}
+
+/* Debug panel styling */
+.debug-panel {
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 300px;
+    background-color: white;
+    padding: 20px;
+    box-shadow: -2px 0 4px rgba(0, 0, 0, 0.1);
+    overflow-y: auto;
+    transition: transform 0.3s ease;
+}
+
+.debug-panel.hidden {
+    transform: translateX(100%);
+}
+
+/* Debug panel header */
+.debug-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* Metrics display */
+.metrics-view {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.metric {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px;
+    background-color: var(--bg-color);
+    border-radius: 4px;
+}
+
+.metric-label {
+    font-weight: 500;
+}
+
+/* Performance indicators */
+.performance-good {
+    color: var(--metric-good);
+}
+
+.performance-warning {
+    color: var(--metric-warning);
+}
+
+.performance-error {
+    color: var(--metric-error);
+}
+
+/* JSON view styling */
+.json-view {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    background-color: var(--bg-color);
+    padding: 10px;
+    border-radius: 4px;
+    overflow-x: auto;
+}
+
+/* Fullscreen mode */
+.fullscreen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1000;
+    background-color: black;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.fullscreen canvas {
+    max-width: 100%;
+    max-height: 100%;
+}
+
+/* FPS display */
+.fps-display {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-family: monospace;
+}
+
+/* Responsive design */
+@media (max-width: 1200px) {
+    .container {
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    .stream {
+        width: 100%;
+        max-width: 640px;
+    }
+    
+    .debug-panel {
+        width: 100%;
+        max-width: 300px;
+    }
+}
+
+/* Loading states */
+.loading {
+    position: relative;
+    opacity: 0.7;
+}
+
+.loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 30px;
+    height: 30px;
+    margin: -15px 0 0 -15px;
+    border: 3px solid var(--accent-color);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
