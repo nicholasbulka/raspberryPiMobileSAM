@@ -17,7 +17,7 @@ import threading
 import onnxruntime
 from collections import deque
 
-from processing import process_frames, capture_frames, apply_effects_loop
+from processing import process_frames, inference_loop, capture_frames, apply_effects_loop
 from utils import (
     perf_stats, PERF_WINDOW_SIZE, LOG_INTERVAL, INPUT_SIZE, PROCESS_SIZE, TARGET_FPS,
     encode_frame_to_base64, cleanup
@@ -36,12 +36,17 @@ def index():
 
 @app.route('/stream')
 def stream():
+    print(state.frame_lock)
+    print(state)
     with state.frame_lock:
+        print('here')
         if state.current_frame is None or state.processed_frame is None:
             return {"error": "No frames available"}, 404
 
         raw_b64 = encode_frame_to_base64(state.current_frame)
         processed_b64 = encode_frame_to_base64(state.processed_frame)
+
+    return {'ok'}
 
     return {
         "raw": raw_b64,
@@ -110,7 +115,8 @@ def main():
         # Start threads
         threads = [
             threading.Thread(target=capture_frames, daemon=True),
-            threading.Thread(target=process_frames, args=(sam,), daemon=True),
+            threading.Thread(target=process_frames, daemon=True),
+            threading.Thread(target=inference_loop, args=(sam,), daemon=True),
             threading.Thread(target=apply_effects_loop, daemon=True)
         ]
         
@@ -126,6 +132,7 @@ def main():
         traceback.print_exc()
     finally:
         cleanup()
+
 
 if __name__ == "__main__":
     try:

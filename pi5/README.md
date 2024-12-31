@@ -1,4 +1,17 @@
 
+
+
+
+
+
+so the masks are there, they are just appearing and disappearing too quickly to notice.
+
+fix this soon.
+
+
+
+
+
 Full details of frames:
 Current frame: shape=(37, 30, 3), dtype=uint8, min=3, max=254
 Previous frame: shape=(54, 96, 3), dtype=uint8, min=0, max=255

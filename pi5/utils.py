@@ -105,42 +105,34 @@ def generate_visualization(frame, masks, scores):
     try:
         if masks is not None and len(masks) > 0:
             print(f"Visualizing {len(masks)} masks")
-            # Create a single overlay for all masks
-            overlay = np.zeros_like(frame, dtype=np.uint8)
-            
-            # Sort masks by score if available
+            colors = generate_vibrant_colors(len(masks))
+
             if scores is not None:
-                print("scores were available")
-                colors = generate_vibrant_colors(len(masks))
                 mask_score_pairs = list(zip(masks, scores, colors))
                 mask_score_pairs.sort(key=lambda x: x[1], reverse=True)
                 masks, scores, colors = zip(*mask_score_pairs)
-            else:
-                print("scores were None")
-                colors = generate_vibrant_colors(len(masks))
 
             for i, (mask, color) in enumerate(zip(masks, colors)):
-                print(f"  Processing mask {i}: shape={mask.shape}, frame={frame.shape}, dtype={mask.dtype}")
-                
-                # Create colored mask
-                mask_color = np.zeros_like(frame, dtype=np.uint8)
-                mask_color[mask] = color
-                
-                # Add this mask to overlay with transparency
-                cv2.addWeighted(overlay, 0.1, mask_color, 0.70, 0, overlay)
-                
-                # Draw contours for better visibility
-                mask_uint8 = mask.astype(np.uint8) * 255
-                contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                print(f"    Found {len(contours)} contours")
-                
-                # Brighter contours for visibility
-                contour_color = np.clip(color + np.array([80, 80, 80]), 0, 255).astype(np.uint8)
-                cv2.drawContours(overlay, contours, -1, contour_color.tolist(), 2)
+                mask_resized = cv2.resize(
+                    mask.astype(np.uint8),
+                    (frame_width, frame_height),
+                    interpolation=cv2.INTER_NEAREST
+                ).astype(bool)
 
-            # Blend the overlay with the original frame
-            result = cv2.addWeighted(frame, 0.1, overlay, 0.7, 0)
-            print("Visualization complete")
+                overlay = np.zeros_like(frame)
+                overlay[mask_resized] = color
+
+                base_alpha = 0.25 + (0.15 * (i / len(masks)))
+                result = cv2.addWeighted(result, 1 - base_alpha, overlay, base_alpha, 0)
+
+                mask_uint8 = mask_resized.astype(np.uint8) * 255
+                contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+                thickness = 2 if i % 2 == 0 else 1
+                contour_color = np.clip(color + np.array([128, 128, 128]), 0, 255)
+                cv2.drawContours(result, contours, -1, contour_color.tolist(), thickness)
+        else:
+            print("No masks available for visualization")
 
     except Exception as e:
         print(f"Error in visualization: {str(e)}")
