@@ -15,9 +15,10 @@
             <div id="global-controls">
                 <div>
                     <h2 style="margin-top: 0; display: inline-block; margin-right: 20px;">Global Controls</h2>
-                    <button id="toggle-8bit" class="toggle-btn">8-bit Mode</button>
+                    <button id="toggle-flip-h" class="flip-btn">Flip Horizontal</button>
+                    <button id="toggle-flip-v" class="flip-btn">Flip Vertical</button>
+                    <button id="toggle-raw" class="show-raw-btn">Show Raw Feed</button>
                 </div>
-                <button id="toggle-raw" class="show-raw-btn">Show Raw Feed</button>
             </div>
             <div id="effect-controls">
                 <h2 style="margin-top: 0;">Visual Effects</h2>
@@ -28,14 +29,14 @@
 
         <div class="container">
             <div class="stream raw">
-                <h2>Raw Feed</h2>
+                <h2 class="stream-title">Raw Feed</h2>
                 <div class="canvas-container">
                     <canvas id="rawCanvas"></canvas>
                     <button class="fullscreen-button">Fullscreen</button>
                 </div>
             </div>
             <div class="stream processed">
-                <h2>Processed Feed</h2>
+                <h2 class="stream-title">Processed Feed</h2>
                 <div class="canvas-container">
                     <canvas id="processedCanvas"></canvas>
                     <button class="fullscreen-button">Fullscreen</button>
@@ -43,24 +44,8 @@
             </div>
         </div>
 
-        <!-- Load main JavaScript -->
-        <script src="/static/js/main.js"></script>
-
-        <!-- Initialize toggle functionality -->
-        <script>
-            document.getElementById('toggle-raw').addEventListener('click', function() {
-                const rawStream = document.querySelector('.stream.raw');
-                const btn = this;
-                if (rawStream.style.display === 'none' || !rawStream.style.display) {
-                    rawStream.style.display = 'block';
-                    btn.classList.add('active');
-                    btn.textContent = 'Hide Raw Feed';
-                } else {
-                    rawStream.style.display = 'none';
-                    btn.classList.remove('active');
-                    btn.textContent = 'Show Raw Feed';
-                }
-            });
-        </script>
+        <!-- Load JavaScript modules -->
+        <script type="module" src="/static/js/effects.js"></script>
+        <script type="module" src="/static/js/main.js"></script>
     </body>
 </html>

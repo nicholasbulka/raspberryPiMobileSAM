@@ -62,11 +62,45 @@ EFFECTS_LIST = [
     }
 ]
 
-def safe_array_access(arr, indices, default_value=0):
-    """Safely access array elements with bounds checking"""
+
+def safe_array_access(arr, indices, default_value=None):
+    """Safely access array elements with bounds checking and error handling.
+    
+    Args:
+        arr: numpy array to access
+        indices: tuple of slice objects or indices
+        default_value: value to return if access fails (default None)
+    
+    Returns:
+        Array slice if successful, default_value if access would be invalid
+    """
     try:
+        # Validate array
+        if arr is None or not isinstance(arr, np.ndarray):
+            return default_value
+            
+        # Convert single index to tuple
+        if not isinstance(indices, tuple):
+            indices = (indices,)
+            
+        # Validate each index/slice
+        for idx, dim in zip(indices, arr.shape):
+            if isinstance(idx, slice):
+                # For slices, check start and stop if they're not None
+                if idx.start is not None and (idx.start < -dim or idx.start > dim):
+                    return default_value
+                if idx.stop is not None and (idx.stop < -dim or idx.stop > dim):
+                    return default_value
+            else:
+                # For direct indices, check bounds
+                if idx < -dim or idx >= dim:
+                    return default_value
+        
+        # If all checks pass, return the slice
         return arr[indices]
-    except IndexError:
+        
+    except Exception as e:
+        print(f"Error in safe_array_access: {e}")
         return default_value
 
 def apply_pixelation(frame, pixelation_factor):
@@ -111,6 +145,8 @@ def apply_melt(frame, params):
         print(f"Error in melt effect: {e}")
         return frame
 
+
+
 def apply_wave(frame, params):
     try:
         pixelation = params.get('pixelation', 6)
@@ -134,43 +170,8 @@ def apply_wave(frame, params):
         print(f"Error in wave effect: {e}")
         return frame
 
-def apply_glitch(frame, params):
-    try:
-        pixelation = params.get('pixelation', 6)
-        intensity = params.get('intensity', 5)
-        speed = params.get('speed', 5)
-
-        frame = apply_pixelation(frame, pixelation)
-        height, width = frame.shape[:2]
-        result = frame.copy()
-
-        # Time-based seed for consistent glitch pattern over small time windows
-        seed = int(time.time() * speed)
-        np.random.seed(seed)
-
-        num_glitches = int(intensity * 5)
-        for _ in range(num_glitches):
-            h = np.random.randint(5, 40)
-            y = np.random.randint(0, height - h)
-            offset = np.random.randint(-20, 20)
-
-            if offset != 0:
-                if offset > 0:
-                    result[y:y+h, offset:] = safe_array_access(result, (slice(y, y+h), slice(None, -offset)))
-                else:
-                    result[y:y+h, :offset] = safe_array_access(result, (slice(y, y+h), slice(-offset, None)))
-
-            # Random color channel shift
-            channel = np.random.randint(0, 3)
-            result[y:y+h, :, channel] = np.roll(result[y:y+h, :, channel], offset, axis=1)
-
-        return result
-    except Exception as e:
-        print(f"Error in glitch effect: {e}")
-        return frame
-
 def apply_grow_masks(frame, masks, params):
-    if masks is None:
+    if masks is None or not isinstance(masks, (list, np.ndarray)) or len(masks) == 0:
         return frame
 
     try:
@@ -182,18 +183,109 @@ def apply_grow_masks(frame, masks, params):
         height, width = frame.shape[:2]
         result = frame.copy()
 
-        # Time-based variation
-        time_factor = (np.sin(time.time() * speed) + 1) / 2  # 0 to 1
-        current_strength = int(strength * 2 * time_factor) + 1
+        # Improved time-based variation with smoother transitions
+        time_factor = (np.sin(time.time() * max(0.5, speed/2)) + 1) / 2  # 0 to 1, slower variation
+        # Scale strength based on image size
+        max_strength = min(20, int(min(height, width) * 0.1))  # Max 10% of smallest dimension
+        current_strength = int(max(1, min(max_strength, strength * 3 * time_factor)))
+
+        intensity = 1.0 + (strength * 0.2)  # Dynamic intensity based on strength
 
         for mask in masks:
-            mask_resized = cv2.resize(mask.astype(np.uint8), (width, height)) > 0
-            grown_mask = binary_dilation(mask_resized, iterations=current_strength)
-            result[grown_mask] = np.clip(frame[grown_mask] * 1.2, 0, 255).astype(np.uint8)
+            if mask.size == 0:
+                continue
+                
+            # Ensure mask is proper size and binary
+            mask_resized = cv2.resize(mask.astype(np.uint8), (width, height))
+            mask_binary = mask_resized > 0
+            
+            # Apply dilation with error checking
+            try:
+                grown_mask = binary_dilation(mask_binary, iterations=current_strength)
+                
+                # Apply effect with bounds checking
+                mask_indices = np.where(grown_mask)
+                if len(mask_indices[0]) > 0:  # Check if mask has any True values
+                    result[mask_indices] = np.clip(
+                        frame[mask_indices] * intensity, 
+                        0, 
+                        255
+                    ).astype(np.uint8)
+            except Exception as e:
+                print(f"Error in mask processing: {e}")
+                continue
 
         return result
     except Exception as e:
         print(f"Error in grow_masks effect: {e}")
+        return frame
+
+def apply_glitch(frame, params):
+    try:
+        pixelation = params.get('pixelation', 6)
+        intensity = params.get('intensity', 5)
+        speed = params.get('speed', 5)
+
+        frame = apply_pixelation(frame, pixelation)
+        height, width = frame.shape[:2]
+        result = frame.copy()
+
+        # Scale glitch parameters based on image dimensions
+        max_height = int(height * 0.2)  # Max 20% of image height
+        min_height = max(3, int(height * 0.01))  # Min 1% of image height
+        max_offset = int(width * 0.1)  # Max 10% of image width
+
+        # Improved time-based seed for more varied patterns
+        base_seed = int(time.time() * speed)
+        fine_seed = int((time.time() % 1) * 1000)  # Sub-second variation
+        np.random.seed(base_seed + fine_seed)
+
+        # Scale number of glitches with intensity and frame size
+        base_glitches = max(1, int(intensity * 2))  # Minimum 1 glitch
+        size_factor = (width * height) / (640 * 360)  # Reference size
+        num_glitches = int(base_glitches * np.sqrt(size_factor))
+
+        # Create glitches
+        for _ in range(num_glitches):
+            # Randomly vary glitch parameters
+            h = np.random.randint(min_height, max_height)
+            y = np.random.randint(0, max(1, height - h))
+            offset = np.random.randint(-max_offset, max_offset)
+
+            if offset != 0:
+                # Apply horizontal offset with safe bounds
+                if offset > 0:
+                    source_slice = safe_array_access(result, (slice(y, y+h), slice(None, -offset)))
+                    if source_slice is not None:
+                        result[y:y+h, offset:] = source_slice
+                else:
+                    source_slice = safe_array_access(result, (slice(y, y+h), slice(-offset, None)))
+                    if source_slice is not None:
+                        result[y:y+h, :offset] = source_slice
+
+                # Apply color channel shift with varying intensity
+                channel = np.random.randint(0, 3)
+                shift_intensity = np.random.uniform(0.5, 1.5)
+                channel_data = result[y:y+h, :, channel].copy()
+                result[y:y+h, :, channel] = np.clip(
+                    np.roll(channel_data * shift_intensity, offset, axis=1),
+                    0,
+                    255
+                ).astype(np.uint8)
+
+                # Random chance for additional effects
+                if np.random.random() < 0.3:  # 30% chance
+                    # Add noise to glitched region
+                    noise = np.random.normal(0, 10, result[y:y+h, :, channel].shape)
+                    result[y:y+h, :, channel] = np.clip(
+                        result[y:y+h, :, channel] + noise,
+                        0,
+                        255
+                    ).astype(np.uint8)
+
+        return result
+    except Exception as e:
+        print(f"Error in glitch effect: {e}")
         return frame
 
 def apply_shrink_masks(frame, masks, params):

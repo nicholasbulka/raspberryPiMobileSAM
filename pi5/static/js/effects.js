@@ -1,22 +1,38 @@
-export default class EffectsManager {
-    constructor(effects) {
-        this.effects = effects;
+// effects.js
+export class EffectsManager {
+    constructor() {
+        // Get effects list from window or use empty array as fallback
+        this.effects = [];
         this.currentEffect = 'none';
         this.effectParams = {};
         this.buttonContainer = null;
         this.paramContainer = null;
+        this.callbacks = {
+            onEffectChange: null,
+            onParamChange: null
+        };
     }
 
-    initialize() {
+    initialize(options = {}) {
+        const { onEffectChange, onParamChange, effectsList } = options;
+        
+        // Set effects list from options or window
+        this.effects = effectsList || window.EFFECTS_LIST || [];
+        
+        this.callbacks.onEffectChange = onEffectChange;
+        this.callbacks.onParamChange = onParamChange;
+        
         this.buttonContainer = document.getElementById('effect-buttons');
         this.paramContainer = document.getElementById('effect-params');
         
         // Set up initial controls
         this.setupEffectControls();
+        this.setupKeyboardShortcuts();
+        this.setupMouseWheelHandler();
         
         // Initialize default effect parameters
         const defaultEffect = this.effects.find(e => e.name === 'none');
-        if (defaultEffect && defaultEffect.params) {
+        if (defaultEffect?.params) {
             defaultEffect.params.forEach(param => {
                 this.effectParams[param.name] = param.default;
             });
@@ -49,42 +65,40 @@ export default class EffectsManager {
         this.paramContainer.innerHTML = '';
         
         const effect = this.effects.find(e => e.name === this.currentEffect);
-        if (!effect) return;
+        if (!effect?.params) return;
         
-        if (effect.params) {
-            effect.params.forEach(param => {
-                const container = document.createElement('div');
-                container.className = 'slider-container';
-                
-                const label = document.createElement('label');
-                label.textContent = param.label;
-                
-                const value = document.createElement('span');
-                value.style.marginLeft = '10px';
-                value.style.minWidth = '30px';
-                value.style.display = 'inline-block';
-                
-                const slider = document.createElement('input');
-                slider.type = 'range';
-                slider.min = param.min;
-                slider.max = param.max;
-                slider.value = this.effectParams[param.name] || param.default;
-                slider.className = 'slider';
-                
+        effect.params.forEach(param => {
+            const container = document.createElement('div');
+            container.className = 'slider-container';
+            
+            const label = document.createElement('label');
+            label.textContent = param.label;
+            
+            const value = document.createElement('span');
+            value.style.marginLeft = '10px';
+            value.style.minWidth = '30px';
+            value.style.display = 'inline-block';
+            
+            const slider = document.createElement('input');
+            slider.type = 'range';
+            slider.min = param.min;
+            slider.max = param.max;
+            slider.value = this.effectParams[param.name] || param.default;
+            slider.className = 'slider';
+            
+            value.textContent = this.formatParamValue(slider.value, param);
+            
+            slider.oninput = () => {
                 value.textContent = this.formatParamValue(slider.value, param);
-                
-                slider.oninput = () => {
-                    value.textContent = this.formatParamValue(slider.value, param);
-                    this.effectParams[param.name] = parseInt(slider.value);
-                    this.updateEffectParams();
-                };
-                
-                container.appendChild(label);
-                container.appendChild(slider);
-                container.appendChild(value);
-                this.paramContainer.appendChild(container);
-            });
-        }
+                this.effectParams[param.name] = parseInt(slider.value);
+                this.updateEffectParams();
+            };
+            
+            container.appendChild(label);
+            container.appendChild(slider);
+            container.appendChild(value);
+            this.paramContainer.appendChild(container);
+        });
     }
 
     async setEffect(effectName) {
@@ -97,41 +111,76 @@ export default class EffectsManager {
             btn.classList.toggle('active', effect && effect.name === effectName);
         });
         
-        // Reset parameters
+        // Reset parameters to defaults for the new effect
+        const effect = this.effects.find(e => e.name === effectName);
         this.effectParams = {};
+        if (effect?.params) {
+            effect.params.forEach(param => {
+                this.effectParams[param.name] = param.default;
+            });
+        }
+        
         this.updateParamControls();
         
         try {
-            const response = await fetch(`/effect/${effectName}`, {
-                method: 'POST'
-            });
-            if (!response.ok) throw new Error('Failed to set effect');
+            // Immediately send both effect change and initial parameters
+            await fetch(`/effect/${effectName}`, { method: 'POST' });
+            await this.updateEffectParams(); // Send initial parameters
+            
+            if (this.callbacks.onEffectChange) {
+                this.callbacks.onEffectChange(effectName);
+            }
         } catch (error) {
             console.error('Error setting effect:', error);
         }
     }
 
-    setEffectParam(name, value) {
-        this.effectParams[name] = value;
-        this.updateEffectParams();
-    }
-
     async updateEffectParams() {
         try {
-            const response = await fetch('/effect_params', {
+            await fetch('/effect_params', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(this.effectParams)
             });
-            if (!response.ok) throw new Error('Failed to update effect parameters');
+            
+            if (this.callbacks.onParamChange) {
+                this.callbacks.onParamChange(this.effectParams);
+            }
         } catch (error) {
             console.error('Error updating effect parameters:', error);
         }
     }
 
+    setupKeyboardShortcuts() {
+        document.addEventListener('keydown', (event) => {
+            const key = event.key.toLowerCase();
+            const shortcuts = {
+                'n': 'none',
+                'm': 'melt',
+                'w': 'wave',
+                'g': 'glitch',
+                '+': 'grow',
+                '-': 'shrink'
+            };
+            
+            if (shortcuts[key]) {
+                this.setEffect(shortcuts[key]);
+            }
+        });
+    }
+
+    setupMouseWheelHandler() {
+        document.addEventListener('wheel', (event) => {
+            if (event.ctrlKey || event.metaKey) {
+                event.preventDefault();
+                this.handlePixelationWheel(event);
+            }
+        }, { passive: false });
+    }
+
     handlePixelationWheel(event) {
         const currentEffect = this.effects.find(e => e.name === this.currentEffect);
-        if (currentEffect && currentEffect.params) {
+        if (currentEffect?.params) {
             const pixelation = this.effectParams['pixelation'] || 6;
             const newValue = event.deltaY > 0 ? 
                 Math.min(pixelation + 1, 20) : 
@@ -143,10 +192,26 @@ export default class EffectsManager {
     }
 
     formatParamValue(value, param) {
-        if (param.name === 'pixelation') return value + 'px';
-        if (param.name.includes('speed')) return value + 'x';
-        if (param.name === 'amplitude') return value + 'px';
-        if (param.name === 'frequency') return value + 'hz';
-        return value;
+        const formatters = {
+            pixelation: value => `${value}px`,
+            speed: value => `${value}x`,
+            amplitude: value => `${value}px`,
+            frequency: value => `${value}hz`,
+            strength: value => `${value}x`,
+            intensity: value => `${value}x`
+        };
+
+        const formatter = formatters[param.name] || (value => value);
+        return formatter(value);
+    }
+
+    getCurrentEffect() {
+        return this.currentEffect;
+    }
+
+    getCurrentParams() {
+        return { ...this.effectParams };
     }
 }
+
+export default EffectsManager;

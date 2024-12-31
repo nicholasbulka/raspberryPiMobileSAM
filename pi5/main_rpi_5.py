@@ -32,6 +32,8 @@ raw_processed_frame = None
 processed_frame = None
 current_masks = None
 current_effect = None
+camera_flipped_h = False
+camera_flipped_v = False
 effect_params = {}
 
 def get_cpu_temp():
@@ -84,8 +86,21 @@ def update_effect_params():
     effect_params = request.json
     return jsonify({"status": "ok"})
 
+@app.route('/flip_camera_h', methods=['POST'])
+def flip_camera_h():
+    global camera_flipped_h
+    camera_flipped_h = not camera_flipped_h
+    return jsonify({"status": "ok", "flipped": camera_flipped_h})
+
+@app.route('/flip_camera_v', methods=['POST'])
+def flip_camera_v():
+    global camera_flipped_v
+    camera_flipped_v = not camera_flipped_v
+    return jsonify({"status": "ok", "flipped": camera_flipped_v})
+
+
 def capture_frames():
-    global current_frame
+    global current_frame, camera_flipped_h, camera_flipped_v
     print("Starting capture frames thread with Picamera2")
     
     try:
@@ -98,11 +113,6 @@ def capture_frames():
             buffer_count=4
         )
         picam2.configure(preview_config)
-        
-        print("Camera configured with settings:")
-        print(f"Resolution: {preview_config['main']['size']}")
-        
-        # Start the camera
         picam2.start()
         print("Camera started successfully")
         
@@ -117,8 +127,11 @@ def capture_frames():
                 # Convert from RGB to BGR for OpenCV compatibility
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 
-                # Flip the frame vertically
-                frame = cv2.flip(frame, -1)
+                # Apply flips based on toggle states
+                if camera_flipped_h:
+                    frame = cv2.flip(frame, 1)  # 1 for horizontal flip
+                if camera_flipped_v:
+                    frame = cv2.flip(frame, 0)  # 0 for vertical flip
                 
                 with frame_lock:
                     current_frame = frame.copy()
@@ -129,13 +142,11 @@ def capture_frames():
                     fps = frame_count/elapsed
                     print(f"Capture FPS: {fps:.2f}")
                     
-                    # Reset FPS counter periodically
                     if frame_count >= 120:
                         frame_count = 0
                         start_time = time.time()
                 
-                # Adaptive sleep to maintain target FPS
-                time.sleep(0.016)  # Target ~60 FPS
+                time.sleep(0.016)
                 
             except Exception as e:
                 print(f"Error during frame capture: {str(e)}")
