@@ -240,7 +240,7 @@ def process_frames(predictor):
                 predictor.set_image(frame_rgb)
 
                 h, w = frame_small.shape[:2]
-                points_per_side = 2
+                points_per_side = 4
                 x = np.linspace(0, w, points_per_side)
                 y = np.linspace(0, h, points_per_side)
                 xv, yv = np.meshgrid(x, y)
