@@ -15,6 +15,7 @@ from flask import Flask, render_template, jsonify, request
 import threading
 import colorsys
 from picamera2 import Picamera2
+import onnxruntime
 print("Basic imports completed")
 
 print("Importing effects module...")
@@ -35,6 +36,9 @@ current_effect = None
 camera_flipped_h = False
 camera_flipped_v = False
 effect_params = {}
+predictor = None
+ort_session = None
+image_embedding = None
 
 def get_cpu_temp():
     try:
@@ -98,6 +102,59 @@ def flip_camera_v():
     camera_flipped_v = not camera_flipped_v
     return jsonify({"status": "ok", "flipped": camera_flipped_v})
 
+def generate_vibrant_colors(n):
+    colors = []
+    golden_ratio = 0.618033988749895
+    saturation_range = (0.7, 1.0)
+    value_range = (0.8, 1.0)
+
+    for i in range(n):
+        hue = (i * golden_ratio) % 1.0
+        saturation = np.random.uniform(*saturation_range)
+        value = np.random.uniform(*value_range)
+        rgb = np.array(colorsys.hsv_to_rgb(hue, saturation, value)) * 255
+        variation = np.random.uniform(-20, 20, 3)
+        rgb = np.clip(rgb + variation, 0, 255)
+        colors.append(rgb.astype(np.uint8))
+
+    np.random.shuffle(colors)
+    return colors
+
+def generate_visualization(frame, masks, scores):
+    print("Generating visualization...")
+    result = frame.copy()
+    frame_height, frame_width = frame.shape[:2]
+
+    if masks is not None and len(masks) > 0:
+        colors = generate_vibrant_colors(len(masks))
+
+        if scores is not None:
+            mask_score_pairs = list(zip(masks, scores, colors))
+            mask_score_pairs.sort(key=lambda x: x[1], reverse=True)
+            masks, scores, colors = zip(*mask_score_pairs)
+
+        for i, (mask, color) in enumerate(zip(masks, colors)):
+            mask_resized = cv2.resize(
+                mask.astype(np.uint8), 
+                (frame_width, frame_height), 
+                interpolation=cv2.INTER_NEAREST
+            ).astype(bool)
+
+            overlay = np.zeros_like(frame)
+            overlay[mask_resized] = color
+
+            base_alpha = 0.25 + (0.15 * (i / len(masks)))
+            result = cv2.addWeighted(result, 1, overlay, base_alpha, 0)
+
+            mask_uint8 = mask_resized.astype(np.uint8) * 255
+            contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            thickness = 2 if i % 2 == 0 else 1
+            contour_color = np.clip(color + np.array([128, 128, 128]), 0, 255)
+            cv2.drawContours(result, contours, -1, contour_color.tolist(), thickness)
+
+    print("Visualization complete")
+    return result
 
 def capture_frames():
     global current_frame, camera_flipped_h, camera_flipped_v
@@ -109,6 +166,7 @@ def capture_frames():
         
         # Configure the camera
         preview_config = picam2.create_preview_configuration(
+            #main={"size": (320, 180)},
             main={"size": (640, 360)},
             buffer_count=4
         )
@@ -166,50 +224,14 @@ def capture_frames():
         except:
             print("Error stopping camera")
 
-def generate_visualization(frame, masks, scores):
-    print("Generating visualization...")
-    result = frame.copy()
-    frame_height, frame_width = frame.shape[:2]
-
-    if masks is not None and len(masks) > 0:
-        colors = generate_vibrant_colors(len(masks))
-
-        if scores is not None:
-            mask_score_pairs = list(zip(masks, scores, colors))
-            mask_score_pairs.sort(key=lambda x: x[1], reverse=True)
-            masks, scores, colors = zip(*mask_score_pairs)
-
-        for i, (mask, color) in enumerate(zip(masks, colors)):
-            mask_resized = cv2.resize(
-                mask.astype(np.uint8), 
-                (frame_width, frame_height), 
-                interpolation=cv2.INTER_NEAREST
-            ).astype(bool)
-
-            overlay = np.zeros_like(frame)
-            overlay[mask_resized] = color
-
-            base_alpha = 0.25 + (0.15 * (i / len(masks)))
-            result = cv2.addWeighted(result, 1, overlay, base_alpha, 0)
-
-            mask_uint8 = mask_resized.astype(np.uint8) * 255
-            contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            thickness = 2 if i % 2 == 0 else 1
-            contour_color = np.clip(color + np.array([128, 128, 128]), 0, 255)
-            cv2.drawContours(result, contours, -1, contour_color.tolist(), thickness)
-
-    print("Visualization complete")
-    return result
-
-def process_frames(predictor):
-    global processed_frame, raw_processed_frame, current_frame, current_masks
+def process_frames(sam):
+    global processed_frame, raw_processed_frame, current_frame, current_masks, predictor, image_embedding
     print("Starting process frames thread")
     
     frames_processed = 0
     start_time = time.time()
     last_process_time = 0
-    target_interval = 0.033  # Reduced to ~30 FPS for faster updates
+    target_interval = 0.033  # ~30 FPS
 
     print("Waiting for first frame...")
     while current_frame is None:
@@ -237,8 +259,11 @@ def process_frames(predictor):
                 frame_small = cv2.resize(frame_to_process, (128, 72))
                 frame_rgb = cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB)
 
+                # Update image embedding
                 predictor.set_image(frame_rgb)
+                image_embedding = predictor.get_image_embedding().cpu().numpy()
 
+                # Set up ONNX inputs
                 h, w = frame_small.shape[:2]
                 points_per_side = 4
                 x = np.linspace(0, w, points_per_side)
@@ -246,23 +271,34 @@ def process_frames(predictor):
                 xv, yv = np.meshgrid(x, y)
                 points = np.stack([xv.flatten(), yv.flatten()], axis=1)
 
-                print("Running prediction...")
-                with torch.no_grad():
-                    masks, scores, _ = predictor.predict(
-                        point_coords=points,
-                        point_labels=np.ones(len(points)),
-                        multimask_output=True
-                    )
-                print("Prediction completed")
+                # Prepare inputs for ONNX model
+                onnx_coord = np.concatenate([points, np.array([[0.0, 0.0]])], axis=0)[None, :, :]
+                onnx_label = np.concatenate([np.ones(len(points.flatten())//2), np.array([-1])], axis=0)[None, :].astype(np.float32)
+                onnx_coord = predictor.transform.apply_coords(onnx_coord, frame_small.shape[:2]).astype(np.float32)
+                onnx_mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
+                onnx_has_mask_input = np.zeros(1, dtype=np.float32)
+
+                ort_inputs = {
+                    "image_embeddings": image_embedding,
+                    "point_coords": onnx_coord,
+                    "point_labels": onnx_label,
+                    "mask_input": onnx_mask_input,
+                    "has_mask_input": onnx_has_mask_input,
+                    "orig_im_size": np.array(frame_small.shape[:2], dtype=np.float32)
+                }
+
+                # Run ONNX inference
+                masks, scores, low_res_logits = ort_session.run(None, ort_inputs)
+                masks = masks > predictor.model.mask_threshold
 
                 if masks is not None and len(masks) > 0:
-                    current_masks = np.array(masks)
+                    current_masks = np.array(masks[0])  # Take first batch
                     print(f"Generated {len(masks)} masks")
                 else:
                     current_masks = None
                     print("No masks generated")
 
-                result = generate_visualization(frame_to_process, masks, scores)
+                result = generate_visualization(frame_to_process, current_masks, scores[0] if scores is not None else None)
 
                 with frame_lock:
                     raw_processed_frame = result.copy()
@@ -324,23 +360,6 @@ def apply_effects_loop():
         import traceback
         traceback.print_exc()
 
-def generate_vibrant_colors(n):
-    colors = []
-    golden_ratio = 0.618033988749895
-    saturation_range = (0.7, 1.0)
-    value_range = (0.8, 1.0)
-
-    for i in range(n):
-        hue = (i * golden_ratio) % 1.0
-        saturation = np.random.uniform(*saturation_range)
-        value = np.random.uniform(*value_range)
-        rgb = np.array(colorsys.hsv_to_rgb(hue, saturation, value)) * 255
-        variation = np.random.uniform(-20, 20, 3)
-        rgb = np.clip(rgb + variation, 0, 255)
-        colors.append(rgb.astype(np.uint8))
-
-    np.random.shuffle(colors)
-    return colors
 
 def main():
     print("\n=== Starting MobileSAM Application ===")
@@ -352,6 +371,7 @@ def main():
     print("Loading MobileSAM model...")
     model_type = "vit_t"
     checkpoint = "weights/mobile_sam.pt"
+    onnx_model_path = "weights/mobile_sam.onnx"
 
     if not os.path.exists(checkpoint):
         print(f"Error: Model file not found at {checkpoint}")
@@ -359,22 +379,26 @@ def main():
         print("wget https://github.com/ChaoningZhang/MobileSAM/raw/master/weights/mobile_sam.pt -P weights/")
         return
 
+    if not os.path.exists(onnx_model_path):
+        print(f"Error: ONNX model file not found at {onnx_model_path}")
+        print("Please export your model to ONNX format first")
+        return
+
     try:
-        print("Initializing model...")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print("Initializing models...")
+        device = "cpu"  # Force CPU for ONNX compatibility
         print(f"Using device: {device}")
 
-        model = sam_model_registry[model_type](checkpoint=checkpoint)
-        print("Model created")
+        # Initialize both regular model (for embeddings) and ONNX model
+        sam = sam_model_registry[model_type](checkpoint=checkpoint)
+        sam.to(device=device)
+        sam.eval()
+        print("SAM model initialized")
 
-        model.to(device=device)
-        print("Model moved to device")
-
-        model.eval()
-        print("Model set to eval mode")
-
-        predictor = SamPredictor(model)
-        print("Predictor created")
+        global predictor, ort_session
+        predictor = SamPredictor(sam)
+        ort_session = onnxruntime.InferenceSession(onnx_model_path)
+        print("ONNX model loaded")
 
         print("\nStarting threads...")
 
@@ -385,7 +409,7 @@ def main():
         print("Capture thread started")
 
         print("Starting process thread...")
-        process_thread = threading.Thread(target=process_frames, args=(predictor,))
+        process_thread = threading.Thread(target=process_frames, args=(sam,))
         process_thread.daemon = True
         process_thread.start()
         print("Process thread started")
