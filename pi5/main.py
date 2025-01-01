@@ -36,22 +36,18 @@ def index():
 
 @app.route('/stream')
 def stream():
-    print(state.frame_lock)
-    print(state)
+
     with state.frame_lock:
-        print('here')
         if state.current_frame is None or state.processed_frame is None:
             return {"error": "No frames available"}, 404
 
         raw_b64 = encode_frame_to_base64(state.current_frame)
         processed_b64 = encode_frame_to_base64(state.processed_frame)
 
-    return {'ok'}
-
     return {
         "raw": raw_b64,
         "processed": processed_b64,
-        "masks": state.current_masks.tolist() if state.current_masks is not None else None
+        "masks": state.cached_masks.tolist() if state.cached_masks is not None else None
     }
 
 @app.route('/effect/<effect_name>', methods=['POST'])

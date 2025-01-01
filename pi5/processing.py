@@ -172,16 +172,13 @@ def inference_loop(sam):
 
             t_embed_start = time.time()
 
-            if first_frame:
-                # First frame: do full embedding
-                print("Computing initial full-frame embedding...")
-                state.predictor.set_image(frame_rgb)
-                state.image_embedding = state.predictor.get_image_embedding().cpu().numpy()
-                first_frame = False
-
+            # Update the embedding for every frame, not just the first one
+            t_embed_start = time.time()
+            state.predictor.set_image(frame_rgb)
+            state.image_embedding = state.predictor.get_image_embedding().cpu().numpy()
             embed_time = time.time() - t_embed_start
             perf_stats['embedding_times'].append(embed_time)
-            
+
             # Store frame for next comparison
             prev_frame = frame_small.copy()
 
