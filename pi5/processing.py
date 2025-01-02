@@ -9,17 +9,20 @@
 # The processing pipeline is split into separate threads to maximize performance
 # on multi-core systems while maintaining real-time processing capabilities.
 
-import cv2
+import cv2 
 import numpy as np
 import time
 import traceback
 from picamera2 import Picamera2
 
 from utils import (
-    perf_stats, INPUT_SIZE, POINTS_PER_SIDE,
-    get_cpu_temp, log_performance_stats,
-    update_mask_tracking, detect_motion
+    perf_stats,
+    get_cpu_temp,
+    log_performance_stats,
+    update_performance_stats
 )
+from motion import detect_motion
+from mask import update_mask_tracking
 import shared_state as state
 from effects import apply_effect
 
@@ -37,7 +40,7 @@ def capture_frames():
         # Initialize camera with optimal settings for our use case
         state.picam2 = Picamera2()
         preview_config = state.picam2.create_preview_configuration(
-            main={"size": INPUT_SIZE},
+            main={"size": state.INPUT_SIZE},
             buffer_count=4  # Increased buffer for smoother capture
         )
         state.picam2.configure(preview_config)
@@ -216,7 +219,7 @@ def inference_loop(sam):
     h, w = (180, 320)  # Reduced size for inference while keeping aspect ratio
     
     # Pre-calculate grid points for prompting
-    points_per_side = POINTS_PER_SIDE
+    points_per_side = state.POINTS_PER_SIDE
     x = np.linspace(0, w, points_per_side)
     y = np.linspace(0, h, points_per_side)
     xv, yv = np.meshgrid(x, y)

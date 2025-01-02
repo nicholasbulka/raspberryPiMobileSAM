@@ -44,3 +44,8 @@ picam2 = None            # Global picamera2 instance
 STABILITY_THRESHOLD = 0.75        # How similar masks need to be to be considered stable
 STABILITY_COUNT_THRESHOLD = 2     # How many stable iterations before flagging
 MASK_THRESHOLD_ADJUSTMENT = -0.4  # Adjustment to MobileSAM threshold
+
+# Constants for optimization
+INPUT_SIZE = (320,180)  # Camera capture size
+PROCESS_SIZE = (320, 180)  # Processing size
+POINTS_PER_SIDE = 8

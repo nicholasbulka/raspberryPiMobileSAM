@@ -11,22 +11,23 @@ import cv2
 cv2.setNumThreads(2)  # Limit OpenCV threads
 
 # Standard library imports
+import torch
+import cv2
 import numpy as np
 import time
 import os
-import io
-import base64
 from flask import Flask, render_template, jsonify, request
 import threading
 import onnxruntime
 from collections import deque
 
-# Local module imports
 from processing import process_frames, inference_loop, capture_frames, apply_effects_loop
-from rendering import render_loop  # New import for rendering functionality
+from rendering import render_loop
 from utils import (
-    perf_stats, PERF_WINDOW_SIZE, LOG_INTERVAL, INPUT_SIZE, PROCESS_SIZE, TARGET_FPS,
-    encode_frame_to_base64, cleanup
+    perf_stats, 
+    LOG_INTERVAL,
+    encode_frame_to_base64,
+    cleanup
 )
 from effects import EFFECTS_LIST
 import shared_state as state
@@ -157,7 +158,7 @@ def main():
             thread.start()
 
         # Start Flask server
-        print(f"\nStarting Flask server (Input: {INPUT_SIZE}, Process: {PROCESS_SIZE}, Target FPS: {TARGET_FPS})")
+        print(f"\nStarting Flask server (Input: {state.INPUT_SIZE}, Process: {state.PROCESS_SIZE})")
         app.run(host='0.0.0.0', port=5000, threaded=True)
 
     except Exception as e:

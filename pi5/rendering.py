@@ -2,11 +2,11 @@
 import cv2
 import numpy as np
 import time
-import colorsys
 import traceback
 from typing import Optional, List, Tuple
 import shared_state as state
 from colors import generate_color
+from mask import resize_mask
 
 # Visualization parameters
 ALPHA_BASE = 0.25        # Base opacity for mask overlays
