@@ -11,14 +11,14 @@ EFFECTS_LIST = [
         'name': 'none',
         'label': 'No Effect',
         'params': [
-            {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 6, 'label': 'Pixelation'}
+            {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 1, 'label': 'Pixelation'}
         ]
     },
     {
         'name': 'melt',
         'label': 'Melt',
         'params': [
-            {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 6, 'label': 'Pixelation'},
+            {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 1, 'label': 'Pixelation'},
             {'name': 'speed', 'min': 1, 'max': 10, 'default': 3, 'label': 'Speed'},
             {'name': 'strength', 'min': 1, 'max': 5, 'default': 2, 'label': 'Strength'}
         ]
@@ -27,7 +27,7 @@ EFFECTS_LIST = [
         'name': 'wave',
         'label': 'Wave',
         'params': [
-            {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 6, 'label': 'Pixelation'},
+            {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 1, 'label': 'Pixelation'},
             {'name': 'amplitude', 'min': 1, 'max': 20, 'default': 10, 'label': 'Amplitude'},
             {'name': 'frequency', 'min': 1, 'max': 10, 'default': 3, 'label': 'Frequency'},
             {'name': 'speed', 'min': 1, 'max': 10, 'default': 5, 'label': 'Speed'}
@@ -37,7 +37,7 @@ EFFECTS_LIST = [
         'name': 'glitch',
         'label': 'Glitch',
         'params': [
-            {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 6, 'label': 'Pixelation'},
+            {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 1, 'label': 'Pixelation'},
             {'name': 'intensity', 'min': 1, 'max': 10, 'default': 5, 'label': 'Intensity'},
             {'name': 'speed', 'min': 1, 'max': 10, 'default': 5, 'label': 'Speed'}
         ]
@@ -46,7 +46,7 @@ EFFECTS_LIST = [
         'name': 'grow',
         'label': 'Grow Masks',
         'params': [
-            {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 6, 'label': 'Pixelation'},
+            {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 1, 'label': 'Pixelation'},
             {'name': 'speed', 'min': 1, 'max': 10, 'default': 5, 'label': 'Speed'},
             {'name': 'strength', 'min': 1, 'max': 5, 'default': 2, 'label': 'Strength'}
         ]
@@ -55,7 +55,7 @@ EFFECTS_LIST = [
         'name': 'shrink',
         'label': 'Shrink Masks',
         'params': [
-            {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 6, 'label': 'Pixelation'},
+            {'name': 'pixelation', 'min': 1, 'max': 20, 'default': 1, 'label': 'Pixelation'},
             {'name': 'speed', 'min': 1, 'max': 10, 'default': 5, 'label': 'Speed'},
             {'name': 'strength', 'min': 1, 'max': 5, 'default': 2, 'label': 'Strength'}
         ]

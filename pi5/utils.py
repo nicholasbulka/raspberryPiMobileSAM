@@ -10,12 +10,12 @@ import traceback
 import shared_state as state
 
 # Constants for optimization
-INPUT_SIZE = (320, 180)  # Camera capture size
-PROCESS_SIZE = (160, 90)  # SAM processing size (increased)
+INPUT_SIZE = (320,180)  # Camera capture size (increased)
+PROCESS_SIZE = (320, 180)  # SAM processing size (unchanged)
 MAX_MASKS = 3  # Maximum number of masks to process
 VISUALIZATION_SCALE = 1.0  # No downscaling for visualization
-POINTS_PER_SIDE = 4  # Increased points for better coverage
-TARGET_FPS = 10  # Target FPS for processing
+POINTS_PER_SIDE = 8  # Increased points for better coverage
+TARGET_FPS = 20  # Target FPS for processing
 
 # Performance monitoring constants
 PERF_WINDOW_SIZE = 100  # Number of frames to keep stats for
@@ -33,6 +33,91 @@ perf_stats = {
 }
 
 last_log_time = time.time()
+
+def compare_masks(mask1, mask2):
+    """
+    Compare two masks and return a similarity score.
+    Score is based on Intersection over Union (IoU).
+    
+    Args:
+        mask1, mask2: Boolean numpy arrays of same shape
+    Returns:
+        float: Similarity score between 0 and 1
+    """
+    if mask1 is None or mask2 is None:
+        return 0.0
+    
+    try:
+        # Ensure masks are boolean arrays
+        mask1 = mask1.astype(bool)
+        mask2 = mask2.astype(bool)
+        
+        # Calculate intersection and union
+        intersection = np.logical_and(mask1, mask2)
+        union = np.logical_or(mask1, mask2)
+        
+        # Calculate IoU
+        intersection_sum = np.sum(intersection)
+        union_sum = np.sum(union)
+        
+        if union_sum == 0:
+            return 0.0
+            
+        return intersection_sum / union_sum
+    except Exception as e:
+        print(f"Error comparing masks: {e}")
+        return 0.0
+
+def update_mask_tracking(current_masks):
+    """
+    Update mask tracking statistics and flags.
+    
+    Args:
+        current_masks: List/array of current mask arrays
+    """
+    try:
+        if current_masks is None:
+            return
+            
+        # Initialize tracking arrays if needed
+        if len(state.mask_stability_counters) != len(current_masks):
+            state.mask_stability_counters = [0] * len(current_masks)
+        if len(state.mask_flags) != len(current_masks):
+            state.mask_flags = ['dynamic'] * len(current_masks)
+            
+        if state.previous_masks is None:
+            state.previous_masks = current_masks
+            state.mask_change_scores = [0.0] * len(current_masks)
+            return
+            
+        # Ensure we have the same number of masks to compare
+        min_masks = min(len(current_masks), len(state.previous_masks))
+        new_change_scores = []
+        
+        # Compare each mask with its previous version
+        for i in range(min_masks):
+            similarity = compare_masks(current_masks[i], state.previous_masks[i])
+            new_change_scores.append(similarity)
+            
+            # Update stability counter
+            if similarity >= state.STABILITY_THRESHOLD:
+                state.mask_stability_counters[i] += 1
+            else:
+                state.mask_stability_counters[i] = 0
+                
+            # Update mask flag based on stability
+            if state.mask_stability_counters[i] >= state.STABILITY_COUNT_THRESHOLD:
+                state.mask_flags[i] = 'stable'
+            else:
+                state.mask_flags[i] = 'dynamic'
+                
+        # Update tracking state
+        state.mask_change_scores = new_change_scores
+        state.previous_masks = current_masks.copy()
+        
+    except Exception as e:
+        print(f"Error updating mask tracking: {e}")
+        traceback.print_exc()
 
 def generate_vibrant_colors(n):
     colors = []
@@ -67,7 +152,7 @@ def log_performance_stats():
     if current_time - last_log_time < LOG_INTERVAL:
         return
     
-    stats = {}
+    stats = {'embedding_times':'inf'}
     for key, values in perf_stats.items():
         if values:
             stats[key] = {
@@ -108,19 +193,24 @@ def generate_visualization(frame, masks, scores):
             colors = generate_vibrant_colors(len(masks))
 
             if scores is not None:
-                mask_score_pairs = list(zip(masks, scores, colors))
+                mask_score_pairs = list(zip(masks, scores, colors, state.mask_flags))
                 mask_score_pairs.sort(key=lambda x: x[1], reverse=True)
-                masks, scores, colors = zip(*mask_score_pairs)
+                masks, scores, colors, flags = zip(*mask_score_pairs)
 
-            for i, (mask, color) in enumerate(zip(masks, colors)):
+            for i, (mask, color, flag) in enumerate(zip(masks, colors, state.mask_flags)):
                 mask_resized = cv2.resize(
                     mask.astype(np.uint8),
                     (frame_width, frame_height),
                     interpolation=cv2.INTER_NEAREST
                 ).astype(bool)
 
-                overlay = np.zeros_like(frame)
-                overlay[mask_resized] = color
+                # For stable masks, convert to black and white
+                if flag == 'stable':
+                    overlay = np.zeros_like(frame)
+                    overlay[mask_resized] = [255, 255, 255]  # White
+                else:
+                    overlay = np.zeros_like(frame)
+                    overlay[mask_resized] = color
 
                 base_alpha = 0.25 + (0.15 * (i / len(masks)))
                 result = cv2.addWeighted(result, 1 - base_alpha, overlay, base_alpha, 0)
@@ -128,9 +218,9 @@ def generate_visualization(frame, masks, scores):
                 mask_uint8 = mask_resized.astype(np.uint8) * 255
                 contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-                thickness = 2 if i % 2 == 0 else 1
-                contour_color = np.clip(color + np.array([128, 128, 128]), 0, 255)
-                cv2.drawContours(result, contours, -1, contour_color.tolist(), thickness)
+                thickness = 1  # Reduced thickness for all contours
+                contour_color = [0, 0, 0] if flag == 'stable' else color.tolist()  # Black for stable masks
+                cv2.drawContours(result, contours, -1, contour_color, thickness)
         else:
             print("No masks available for visualization")
 

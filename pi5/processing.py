@@ -6,13 +6,15 @@ import traceback
 from picamera2 import Picamera2
 
 from utils import (
-    perf_stats, INPUT_SIZE,
-    generate_visualization, get_cpu_temp, log_performance_stats
+    perf_stats, INPUT_SIZE, POINTS_PER_SIDE,
+    generate_visualization, get_cpu_temp, log_performance_stats,
+    update_mask_tracking
 )
 import shared_state as state
 from effects import apply_effect
 
 def capture_frames():
+    """Continuously capture frames from the camera and update the current frame in shared state."""
     last_capture_time = time.time()
     
     try:
@@ -56,6 +58,7 @@ def capture_frames():
             state.picam2.stop()
 
 def process_frames():
+    """Process frames with current masks and apply visualizations."""
     print("Starting process frames thread")
     
     last_process_time = time.time()
@@ -73,6 +76,8 @@ def process_frames():
                     if state.current_frame is None:
                         continue
                     frame_to_process = state.current_frame.copy()
+                    current_masks = state.current_masks
+                    current_scores = state.mask_scores
 
                 process_start_time = time.time()
                 perf_stats['cpu_temps'].append(get_cpu_temp())
@@ -84,9 +89,9 @@ def process_frames():
                     time.sleep(target_interval - time_since_last)
                     continue
 
-                # Always generate visualization, using cached masks if available
+                # Generate visualization with current masks and scores
                 print("Generating visualization...")
-                result = generate_visualization(frame_to_process, state.cached_masks, state.cached_scores)
+                result = generate_visualization(frame_to_process, current_masks, current_scores)
                 
                 with state.frame_lock:
                     state.raw_processed_frame = result.copy()
@@ -109,6 +114,7 @@ def process_frames():
         traceback.print_exc()
 
 def apply_effects_loop():
+    """Apply visual effects to the processed frame using current masks."""
     print("Starting effects loop")
     while True:
         current_time = time.time()
@@ -117,14 +123,17 @@ def apply_effects_loop():
                 print(f"\nEffect Debug:")
                 print(f"Current effect: {state.current_effect}")
                 print(f"Has raw frame: {state.raw_processed_frame is not None}")
-                print(f"Has masks: {state.cached_masks is not None}")
-                if state.cached_masks is not None:
-                    print(f"Masks shape: {state.cached_masks.shape}")
-
+                print(f"Has masks: {state.current_masks is not None}")
+                
                 with state.frame_lock:
+                    if state.current_masks is not None:
+                        print(f"Masks shape: {state.current_masks.shape}")
+                        print(f"Mask flags: {state.mask_flags}")
+                    
                     if state.raw_processed_frame is not None:
                         frame_to_process = state.raw_processed_frame.copy()
-                        result = apply_effect(frame_to_process, state.current_effect, state.effect_params, state.cached_masks)
+                        masks_for_effect = state.current_masks
+                        result = apply_effect(frame_to_process, state.current_effect, state.effect_params, masks_for_effect)
                         state.processed_frame = result
                     else:
                         print("No raw frame available")
@@ -137,20 +146,18 @@ def apply_effects_loop():
             time.sleep(0.1)
 
 def inference_loop(sam):
-    print("Starting inference loop")
+    """Run inference on frames and update mask tracking."""
+    # Use smaller size for inference to maintain performance
+    h, w = (180, 320)  # Reduced size for inference while keeping aspect ratio
     
-    prev_frame = None
-    first_frame = True  # Track if this is our first frame
-
-    # Pre-calculate grid points for 96x54 processing size
-    h, w = (54, 96)
-    points_per_side = 4
+    # Pre-calculate grid points for larger size
+    points_per_side = POINTS_PER_SIDE  # Increase from 4 to get more detailed segments
     x = np.linspace(0, w, points_per_side)
     y = np.linspace(0, h, points_per_side)
     xv, yv = np.meshgrid(x, y)
-    fixed_points = np.stack([xv.flatten(), yv.flatten()], axis=1)
+    fixed_points = np.stack([xv.flatten(), yv.flatten()], axis=1) 
     
-    # Pre-allocate arrays
+    # Pre-allocate arrays for ONNX
     onnx_coord = np.concatenate([fixed_points, np.array([[0.0, 0.0]])], axis=0)[None, :, :]
     onnx_label = np.concatenate([np.ones(len(fixed_points)), np.array([-1])], axis=0)[None, :].astype(np.float32)
     onnx_mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
@@ -170,17 +177,12 @@ def inference_loop(sam):
             frame_rgb = cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB)
             perf_stats['resize_times'].append(time.time() - t_resize_start)
 
-            t_embed_start = time.time()
-
-            # Update the embedding for every frame, not just the first one
+            # Update embedding
             t_embed_start = time.time()
             state.predictor.set_image(frame_rgb)
             state.image_embedding = state.predictor.get_image_embedding().cpu().numpy()
             embed_time = time.time() - t_embed_start
             perf_stats['embedding_times'].append(embed_time)
-
-            # Store frame for next comparison
-            prev_frame = frame_small.copy()
 
             # Prepare ONNX inputs
             onnx_coord_frame = state.predictor.transform.apply_coords(onnx_coord, frame_small.shape[:2]).astype(np.float32)
@@ -193,12 +195,13 @@ def inference_loop(sam):
                 "orig_im_size": np.array(frame_small.shape[:2], dtype=np.float32)
             }
             
-            # Run ONNX inference
+            # Run inference
             t_inference_start = time.time()
-
             print("Running ONNX inference...")
             masks, scores, low_res_logits = state.ort_session.run(None, ort_inputs)
-            masks = masks > state.predictor.model.mask_threshold
+            
+            # Apply threshold adjustment
+            masks = masks > (state.predictor.model.mask_threshold + state.MASK_THRESHOLD_ADJUSTMENT)
             print(f"ONNX inference complete. Masks shape: {masks.shape}, Scores shape: {scores.shape}")
 
             inference_time = time.time() - t_inference_start
@@ -208,9 +211,10 @@ def inference_loop(sam):
                 top_mask_indices = np.argsort(scores[0])[-2:]
                 print(f"Selected top {len(top_mask_indices)} masks")
                 
-                # Resize masks to full frame size before storing
+                # Resize masks to full frame size
                 resized_masks = []
                 frame_height, frame_width = frame_to_process.shape[:2]
+                
                 for mask_idx in top_mask_indices:
                     mask = masks[0][mask_idx]
                     print(f"Processing mask {mask_idx}: shape before resize={mask.shape}")
@@ -222,11 +226,25 @@ def inference_loop(sam):
                     print(f"Mask {mask_idx}: shape after resize={mask_resized.shape}")
                     resized_masks.append(mask_resized)
                 
-                state.cached_masks = np.array(resized_masks)
-                state.cached_scores = scores
-                print(f"Updated cached masks: {state.cached_masks.shape}")
+                # Convert to numpy array for consistent handling
+                resized_masks = np.array(resized_masks)
+                
+                # Update tracking before we update the shared state
+                update_mask_tracking(resized_masks)
+                
+                # Update shared state with thread safety
+                with state.frame_lock:
+                    state.current_masks = resized_masks
+                    state.mask_scores = scores[0][top_mask_indices]  # Only keep scores for top masks
+                    print(f"Updated current masks: {state.current_masks.shape}")
+                    print(f"Current mask flags: {state.mask_flags}")
+                    print(f"Stability counters: {state.mask_stability_counters}")
+                    print(f"Mask change scores: {state.mask_change_scores}")
             else:
                 print("No masks detected")
+                with state.frame_lock:
+                    state.current_masks = None
+                    state.mask_scores = None
 
         except Exception as e:
             print(f"Error in inference loop: {str(e)}")

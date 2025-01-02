@@ -9,7 +9,7 @@ export class StreamManager {
 
         // Stream properties
         this.streamInterval = null;
-        this.updateInterval = 500; // 20 FPS default
+        this.updateInterval = 400; // 20 FPS default
         
         // Fullscreen properties
         this.isFullscreen = false;

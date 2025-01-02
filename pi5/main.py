@@ -36,7 +36,6 @@ def index():
 
 @app.route('/stream')
 def stream():
-
     with state.frame_lock:
         if state.current_frame is None or state.processed_frame is None:
             return {"error": "No frames available"}, 404
@@ -44,10 +43,13 @@ def stream():
         raw_b64 = encode_frame_to_base64(state.current_frame)
         processed_b64 = encode_frame_to_base64(state.processed_frame)
 
+        # Create a copy of the current masks if they exist
+        masks = state.current_masks.tolist() if state.current_masks is not None else None
+
     return {
         "raw": raw_b64,
         "processed": processed_b64,
-        "masks": state.cached_masks.tolist() if state.cached_masks is not None else None
+        "masks": masks
     }
 
 @app.route('/effect/<effect_name>', methods=['POST'])
@@ -128,7 +130,6 @@ def main():
         traceback.print_exc()
     finally:
         cleanup()
-
 
 if __name__ == "__main__":
     try:
