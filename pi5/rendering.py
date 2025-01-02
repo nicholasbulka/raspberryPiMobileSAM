@@ -6,6 +6,7 @@ import colorsys
 import traceback
 from typing import Optional, List, Tuple
 import shared_state as state
+from colors import generate_color
 
 # Visualization parameters
 ALPHA_BASE = 0.25        # Base opacity for mask overlays
@@ -44,59 +45,36 @@ def debug_array(name: str, arr: np.ndarray) -> None:
     
     last_debug_time = current_time
 
-def generate_color(index: int) -> np.ndarray:
-    """Generate a vibrant, visually distinct color for mask visualization."""
-    if index in mask_colors:
-        return mask_colors[index]
-        
-    golden_ratio = 0.618033988749895
-    hue = (index * golden_ratio) % 1.0
-    saturation = np.random.uniform(0.7, 1.0)
-    value = np.random.uniform(0.8, 1.0)
-    
-    rgb = np.array(colorsys.hsv_to_rgb(hue, saturation, value)) * 255
-    variation = np.random.uniform(-20, 20, 3)
-    rgb = np.clip(rgb + variation, 0, 255)
-    
-    color = rgb.astype(np.uint8)
-    mask_colors[index] = color
-    return color
-
 def create_mask_visualization(frame: np.ndarray,
                             masks: Optional[List[np.ndarray]] = None,
                             mask_flags: Optional[List[str]] = None,
                             motion_mask: Optional[np.ndarray] = None) -> np.ndarray:
     """
-    Create a visualization of the masks overlaid on the frame.
-    Now includes motion-based mask removal.
-    
-    Args:
-        frame: Base frame to overlay masks on
-        masks: List of segmentation masks
-        mask_flags: List of mask states ('stable' or 'dynamic')
-        motion_mask: Optional motion mask to control mask visibility
+    Create a visualization of the masks overlaid on the frame with proper alpha handling.
+    Uses premultiplied alpha to ensure correct blending across multiple layers.
     """
     if masks is None or len(masks) == 0:
         return frame.copy()
         
-    result = frame.copy()
+    # Start with a fresh copy of the frame converted to float32
+    result = frame.astype(np.float32) / 255.0
     frame_height, frame_width = frame.shape[:2]
+    
+    # Initialize accumulated alpha channel
+    accumulated_alpha = np.zeros((frame_height, frame_width), dtype=np.float32)
     
     # Initialize mask flags if not provided
     if mask_flags is None:
         mask_flags = ['dynamic'] * len(masks)
         
-    # If we have a motion mask, prepare it for blending
+    # Process motion mask if provided
     if motion_mask is not None:
-        # Ensure motion mask is in the right format
-        motion_mask = motion_mask.astype(np.float32)
-        motion_mask = cv2.resize(motion_mask, (frame_width, frame_height))
+        motion_mask = cv2.resize(motion_mask.astype(np.float32), 
+                               (frame_width, frame_height))
         motion_mask = np.clip(motion_mask, 0, 1)
-        # Create inverse mask (1 where no motion, 0 where motion)
         inverse_motion = 1.0 - motion_mask
-        inverse_motion_3ch = np.dstack([inverse_motion] * 3)
     
-    # Create mask overlays
+    # Create mask overlays with premultiplied alpha
     for i, (mask, flag) in enumerate(zip(masks, mask_flags)):
         # Ensure mask is properly sized
         mask_resized = cv2.resize(
@@ -105,47 +83,58 @@ def create_mask_visualization(frame: np.ndarray,
             interpolation=cv2.INTER_NEAREST
         ).astype(bool)
         
-        # Create colored overlay
-        overlay = np.zeros_like(frame, dtype=np.float32)
-        color = [255, 255, 255] if flag == 'stable' else generate_color(i)
-        overlay[mask_resized] = color
+        # Calculate this layer's alpha
+        base_alpha = ALPHA_BASE + (ALPHA_INCREMENT * (i / len(masks)))
         
-        # Calculate alpha for this layer
-        alpha = ALPHA_BASE + (ALPHA_INCREMENT * (i / len(masks)))
-        
+        # Adjust alpha based on motion if needed
         if motion_mask is not None:
-            # Apply motion-based transparency
-            # Where motion is detected (motion_mask > threshold):
-            #   - The inverse_motion_3ch will be close to 0, making the mask disappear
-            # Where no motion is detected:
-            #   - The inverse_motion_3ch will be close to 1, showing the mask normally
-            motion_significant = motion_mask > MOTION_THRESHOLD
-            alpha = alpha * inverse_motion_3ch
+            layer_alpha = base_alpha * inverse_motion
+        else:
+            layer_alpha = np.full((frame_height, frame_width), base_alpha, 
+                                dtype=np.float32)
+            
+        # Only apply alpha where mask exists
+        layer_alpha = layer_alpha * mask_resized
         
-        # Convert to float32 for blending
-        result_float = result.astype(np.float32)
+        # Create color overlay
+        color = np.array([1.0, 1.0, 1.0] if flag == 'stable' else 
+                        generate_color(i).astype(np.float32) / 255.0)
         
-        # Blend overlay with result using the motion-adjusted alpha
-        result = cv2.addWeighted(
-            result_float,
-            1.0,
-            overlay,
-            alpha,
-            0
-        ).astype(np.uint8)
+        # Create premultiplied color overlay
+        overlay = np.zeros((frame_height, frame_width, 3), dtype=np.float32)
+        for c in range(3):
+            overlay[:, :, c] = color[c] * layer_alpha
+            
+        # Composite using premultiplied alpha
+        available_alpha = 1.0 - accumulated_alpha
+        layer_contribution = layer_alpha * available_alpha
+        accumulated_alpha += layer_contribution
         
-        # Draw contours where there isn't significant motion
-        mask_uint8 = mask_resized.astype(np.uint8) * 255
+        for c in range(3):
+            result[:, :, c] = result[:, :, c] * (1.0 - layer_contribution) + \
+                             overlay[:, :, c]
+    
+    # Ensure final result is properly bounded and converted back to uint8
+    result = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+    
+    # Draw contours
+    for i, (mask, flag) in enumerate(zip(masks, mask_flags)):
+        mask_uint8 = cv2.resize(
+            mask.astype(np.uint8),
+            (frame_width, frame_height),
+            interpolation=cv2.INTER_NEAREST
+        ) * 255
+        
         contours, _ = cv2.findContours(
             mask_uint8, 
             cv2.RETR_EXTERNAL, 
             cv2.CHAIN_APPROX_SIMPLE
         )
         
-        if motion_mask is not None:
-            # Only draw contours where there isn't significant motion
-            contour_color = [0, 0, 0] if flag == 'stable' else color.tolist()
-            cv2.drawContours(result, contours, -1, contour_color, 1)
+        # Only draw contours where motion is minimal
+        contour_color = [0, 0, 0] if flag == 'stable' else \
+                       generate_color(i).tolist()
+        cv2.drawContours(result, contours, -1, contour_color, 1)
     
     return result
 

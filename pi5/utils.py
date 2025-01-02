@@ -1,4 +1,3 @@
-# utils.py
 import cv2
 import numpy as np
 import colorsys
@@ -8,6 +7,15 @@ import statistics
 from collections import deque
 import traceback
 import shared_state as state
+from colors import color_scheme
+
+# Color constants for visualization
+# Using our natural color scheme for debugging visualization
+KEYPOINTS_BGR = color_scheme.MAIN_COLOR_BGR          # Main color (Tea Green) for current keypoints
+PREVIOUS_POSITION_BGR = color_scheme.SECONDARY_COLOR_BGR  # Secondary color (Tea Green 2) for previous positions
+MOTION_VECTOR_BGR = color_scheme.HIGHLIGHT_COLOR_BGR     # Highlight color (Vanilla) for motion vectors
+MOTION_AREA_BGR = color_scheme.ACCENT_COLOR_BGR         # Accent color (Sage) for motion areas
+FONT_BGR = color_scheme.SHADOW_COLOR_BGR               # Shadow color (Moss Green) for text
 
 # Constants for optimization
 INPUT_SIZE = (320,180)  # Camera capture size
@@ -64,6 +72,7 @@ motion_history = None
 def create_debug_frame(frame, curr_points, prev_points, motion_vectors=None, motion_areas=None):
     """
     Create a debug visualization showing feature detection and tracking.
+    Uses our natural color scheme for a more cohesive visual appearance.
     
     Args:
         frame: Original frame
@@ -77,12 +86,11 @@ def create_debug_frame(frame, curr_points, prev_points, motion_vectors=None, mot
     """
     debug_frame = frame.copy()
     
-    # Draw all detected feature points
+    # Draw all detected feature points with Tea Green color
     if curr_points is not None:
         for point in curr_points:
             x, y = point.ravel()
-            # Green circle for current points
-            cv2.circle(debug_frame, (int(x), int(y)), 2, (0, 255, 0), -1)
+            cv2.circle(debug_frame, (int(x), int(y)), 2, KEYPOINTS_BGR, -1)
     
     # Draw motion tracking information
     if prev_points is not None and motion_vectors is not None:
@@ -92,21 +100,20 @@ def create_debug_frame(frame, curr_points, prev_points, motion_vectors=None, mot
             
             # Only draw significant motion
             if np.sqrt(motion[0]**2 + motion[1]**2) > MIN_MOTION_DISTANCE:
-                # Red circle for previous position
-                cv2.circle(debug_frame, (int(x1), int(y1)), 2, (0, 0, 255), -1)
-                # Yellow line showing motion vector
+                # Previous position with Tea Green 2 color
+                cv2.circle(debug_frame, (int(x1), int(y1)), 2, PREVIOUS_POSITION_BGR, -1)
+                # Motion vector with Vanilla color
                 cv2.line(debug_frame, (int(x1), int(y1)), (int(x2), int(y2)), 
-                        (0, 255, 255), 1)
+                        MOTION_VECTOR_BGR, 1)
     
-    # Draw motion areas if available
+    # Draw motion areas with Sage color if available
     if motion_areas is not None:
-        # Blue contours for motion areas
-        cv2.drawContours(debug_frame, motion_areas, -1, (255, 0, 0), 1)
+        cv2.drawContours(debug_frame, motion_areas, -1, MOTION_AREA_BGR, 1)
     
-    # Add feature count to debug frame
+    # Add feature count to debug frame with Moss Green color
     if curr_points is not None:
         cv2.putText(debug_frame, f"Features: {len(curr_points)}", (10, 20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                   cv2.FONT_HERSHEY_DUPLEX, 0.75, FONT_BGR, 1)
     
     return debug_frame
 
