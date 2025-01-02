@@ -183,29 +183,24 @@ def apply_grow_masks(frame, masks, params):
         height, width = frame.shape[:2]
         result = frame.copy()
 
-        # Improved time-based variation with smoother transitions
-        time_factor = (np.sin(time.time() * max(0.5, speed/2)) + 1) / 2  # 0 to 1, slower variation
-        # Scale strength based on image size
-        max_strength = min(20, int(min(height, width) * 0.1))  # Max 10% of smallest dimension
+        time_factor = (np.sin(time.time() * max(0.5, speed/2)) + 1) / 2
+        max_strength = min(20, int(min(height, width) * 0.1))
         current_strength = int(max(1, min(max_strength, strength * 3 * time_factor)))
-
-        intensity = 1.0 + (strength * 0.2)  # Dynamic intensity based on strength
+        intensity = 1.0 + (strength * 0.2)
 
         for mask in masks:
-            if mask.size == 0:
+            if not mask:  # Use PhysicsMask's __bool__ method
                 continue
                 
-            # Ensure mask is proper size and binary
-            mask_resized = cv2.resize(mask.astype(np.uint8), (width, height))
+            # Ensure mask is proper size and binary using .mask property
+            mask_resized = cv2.resize(mask.mask.astype(np.uint8), (width, height))
             mask_binary = mask_resized > 0
             
-            # Apply dilation with error checking
             try:
                 grown_mask = binary_dilation(mask_binary, iterations=current_strength)
                 
-                # Apply effect with bounds checking
                 mask_indices = np.where(grown_mask)
-                if len(mask_indices[0]) > 0:  # Check if mask has any True values
+                if len(mask_indices[0]) > 0:
                     result[mask_indices] = np.clip(
                         frame[mask_indices] * intensity, 
                         0, 
@@ -219,7 +214,7 @@ def apply_grow_masks(frame, masks, params):
     except Exception as e:
         print(f"Error in grow_masks effect: {e}")
         return frame
-
+        
 def apply_glitch(frame, params):
     try:
         pixelation = params.get('pixelation', 6)

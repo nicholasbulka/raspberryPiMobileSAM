@@ -3,7 +3,8 @@ import numpy as np
 import time
 import traceback
 from colors import color_scheme
-from mask import resize_mask
+from physics import detect_motion_collision, update_mask_physics, translate_mask
+from mask_types import PhysicsMask
 from utils import update_performance_stats
 import shared_state as state
 
@@ -18,24 +19,9 @@ FLOW_PARAMS = {
     'flags': cv2.OPTFLOW_FARNEBACK_GAUSSIAN
 }
 
-# Motion effect parameters
-MOTION_THRESHOLD = 0.2       # Minimum motion magnitude for effect
-EFFECT_PULSE_RATE = 5.0      # Rate of effect pulsing (Hz)
-SPARKLE_PROBABILITY = 0.1    # Base probability for sparkle effect
-DISPLACEMENT_SCALE = 0.5     # Scale factor for motion displacement
-
 def detect_motion(current_frame, previous_frame):
     """
-    Detect motion using dense optical flow and return motion information in the 
-    format expected by the processing pipeline. This function bridges our new
-    dense flow implementation with the existing pipeline.
-    
-    Args:
-        current_frame: Current video frame
-        previous_frame: Previous video frame
-        
-    Returns:
-        tuple: (motion_contours, debug_frame, motion_intensity)
+    Detect motion and update physics for any masks.
     """
     # Get dense optical flow data
     flow, magnitude, angle, flow_vis, motion_intensity = detect_motion_dense(
@@ -47,7 +33,7 @@ def detect_motion(current_frame, previous_frame):
         
     try:
         # Create motion contours from magnitude
-        motion_mask = magnitude > MOTION_THRESHOLD
+        motion_mask = magnitude > state.MIN_MOTION_THRESHOLD
         motion_mask = motion_mask.astype(np.uint8) * 255
         
         # Find contours in the motion mask
@@ -57,29 +43,56 @@ def detect_motion(current_frame, previous_frame):
             cv2.CHAIN_APPROX_SIMPLE
         )
         
+        # Update physics for all active masks
+        frame_size = current_frame.shape[:2]
+        active_masks = []
+        
+        with state.frame_lock:
+            for physics_mask in state.current_masks:
+                if not physics_mask.is_active:
+                    continue
+                    
+                # Detect collision with motion
+                dx, dy = detect_motion_collision(
+                    physics_mask, 
+                    flow, 
+                    magnitude, 
+                    angle,
+                    threshold=state.MIN_MOTION_THRESHOLD
+                )
+                
+                # Update velocities based on detected motion
+                physics_mask.dx += dx * state.MOTION_FORCE_SCALE
+                physics_mask.dy += dy * state.MOTION_FORCE_SCALE
+                
+                # Update position and check if still active
+                update_mask_physics(physics_mask, frame_size)
+                
+                # Translate mask data based on new position
+                if physics_mask.is_active:
+                    physics_mask.mask = translate_mask(
+                        physics_mask.mask,
+                        int(physics_mask.dx),
+                        int(physics_mask.dy),
+                        frame_size
+                    )
+                    active_masks.append(physics_mask)
+            
+            # Update state with only active masks
+            state.current_masks = active_masks
+        
         # Use flow visualization as debug frame
         debug_frame = flow_vis
         
         return contours, debug_frame, motion_intensity
         
     except Exception as e:
-        print(f"Error creating motion contours: {str(e)}")
+        print(f"Error in motion detection: {str(e)}")
         traceback.print_exc()
         return None, current_frame, 0.0
 
 def detect_motion_dense(current_frame, previous_frame):
-    """
-    Detect motion using dense optical flow. This function calculates motion 
-    for every pixel in the frame using the Farneback algorithm, which provides
-    rich motion information we can use for artistic effects.
-    
-    Args:
-        current_frame: Current video frame
-        previous_frame: Previous video frame
-        
-    Returns:
-        tuple: (flow, magnitude, angle, flow_visualization, motion_intensity)
-    """
+    """Detect dense optical flow between frames."""
     if previous_frame is None:
         return None, None, None, current_frame, 0.0
     

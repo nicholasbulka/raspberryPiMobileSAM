@@ -55,12 +55,12 @@ def stream():
         raw_b64 = encode_frame_to_base64(state.current_frame)
         rendered_b64 = encode_frame_to_base64(state.rendered_frame)
 
-        # Create a copy of the current masks if they exist
-        masks = state.current_masks.tolist() if state.current_masks is not None else None
+        # Handle masks - convert each PhysicsMask to a list
+        masks = [mask.tolist() for mask in state.current_masks] if state.current_masks else None
 
     return {
         "raw": raw_b64,
-        "processed": rendered_b64,  # Now using rendered_frame instead of processed_frame
+        "processed": rendered_b64,
         "masks": masks
     }
 

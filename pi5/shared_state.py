@@ -4,6 +4,8 @@
 
 import threading
 import numpy as np
+from mask_types import PhysicsMask
+from typing import List, Tuple, Optional
 
 # Thread synchronization locks
 frame_lock = threading.Lock()        # Protects frame-related state
@@ -19,7 +21,7 @@ processed_frame = None     # Frame after effects
 rendered_frame = None      # Final frame after rendering (new!)
 
 # Mask processing state
-current_masks = None       # Current segmentation masks
+current_masks: List[PhysicsMask] = []  # Current physics-enabled masks
 mask_scores = None        # Confidence scores for current masks
 previous_masks = None     # Previous frame's masks for tracking
 mask_change_scores = []   # Track mask changes between frames
@@ -49,3 +51,7 @@ MASK_THRESHOLD_ADJUSTMENT = -0.4  # Adjustment to MobileSAM threshold
 INPUT_SIZE = (320,180)  # Camera capture size
 PROCESS_SIZE = (320, 180)  # Processing size
 POINTS_PER_SIDE = 8
+
+# Physics parameters
+MOTION_FORCE_SCALE = 2.0  # Scale factor for motion forces
+MIN_MOTION_THRESHOLD = 0.2  # Minimum motion magnitude to trigger physics

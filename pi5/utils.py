@@ -17,7 +17,9 @@ perf_stats = {
     'visualization_times': deque(maxlen=PERF_WINDOW_SIZE),
     'frame_intervals': deque(maxlen=PERF_WINDOW_SIZE),
     'cpu_temps': deque(maxlen=PERF_WINDOW_SIZE),
-    'total_process_times': deque(maxlen=PERF_WINDOW_SIZE)
+    'total_process_times': deque(maxlen=PERF_WINDOW_SIZE),
+    'embedding_times': deque(maxlen=PERF_WINDOW_SIZE),
+    'inference_times': deque(maxlen=PERF_WINDOW_SIZE)
 }
 
 # Global state for performance monitoring

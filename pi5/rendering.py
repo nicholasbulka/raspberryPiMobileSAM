@@ -1,4 +1,3 @@
-# rendering.py
 import cv2
 import numpy as np
 import time
@@ -7,6 +6,7 @@ from typing import Optional, List, Tuple
 import shared_state as state
 from colors import generate_color
 from mask import resize_mask
+from mask_types import PhysicsMask
 
 # Visualization parameters
 ALPHA_BASE = 0.25        # Base opacity for mask overlays
@@ -17,22 +17,8 @@ MOTION_SMOOTHING = 0.8   # Temporal smoothing factor
 # Cache for generated colors to maintain consistent mask coloring
 mask_colors = {}
 
-# Debug settings for array visualization
-debug_enabled = True
-last_debug_time = time.time()
-debug_interval = 1.0  # Seconds between debug prints
-
 def debug_array(name: str, arr: np.ndarray) -> None:
     """Print debug information about numpy arrays."""
-    global last_debug_time
-    
-    if not debug_enabled:
-        return
-        
-    current_time = time.time()
-    if current_time - last_debug_time < debug_interval:
-        return
-        
     if arr is None:
         print(f"{name} is None")
         return
@@ -42,16 +28,14 @@ def debug_array(name: str, arr: np.ndarray) -> None:
     print(f"  dtype: {arr.dtype}")
     print(f"  min: {np.min(arr)}, max: {np.max(arr)}")
     print(f"  unique values: {np.unique(arr)[:5]}...")
-    
-    last_debug_time = current_time
 
 def create_mask_visualization(frame: np.ndarray,
-                            masks: Optional[List[np.ndarray]] = None,
+                            masks: Optional[List[PhysicsMask]] = None,
                             mask_flags: Optional[List[str]] = None,
                             motion_mask: Optional[np.ndarray] = None) -> np.ndarray:
     """
     Create a visualization of the masks overlaid on the frame with proper alpha handling.
-    Uses premultiplied alpha to ensure correct blending across multiple layers.
+    Now properly handles PhysicsMask objects by accessing their underlying numpy arrays.
     """
     if masks is None or len(masks) == 0:
         return frame.copy()
@@ -75,66 +59,81 @@ def create_mask_visualization(frame: np.ndarray,
         inverse_motion = 1.0 - motion_mask
     
     # Create mask overlays with premultiplied alpha
-    for i, (mask, flag) in enumerate(zip(masks, mask_flags)):
-        # Ensure mask is properly sized
-        mask_resized = cv2.resize(
-            mask.astype(np.uint8),
-            (frame_width, frame_height),
-            interpolation=cv2.INTER_NEAREST
-        ).astype(bool)
-        
-        # Calculate this layer's alpha
-        base_alpha = ALPHA_BASE + (ALPHA_INCREMENT * (i / len(masks)))
-        
-        # Adjust alpha based on motion if needed
-        if motion_mask is not None:
-            layer_alpha = base_alpha * inverse_motion
-        else:
-            layer_alpha = np.full((frame_height, frame_width), base_alpha, 
-                                dtype=np.float32)
+    for i, (physics_mask, flag) in enumerate(zip(masks, mask_flags)):
+        try:
+            # Access the underlying numpy array from the PhysicsMask object
+            mask_data = physics_mask.mask
             
-        # Only apply alpha where mask exists
-        layer_alpha = layer_alpha * mask_resized
-        
-        # Create color overlay
-        color = np.array([1.0, 1.0, 1.0] if flag == 'stable' else 
-                        generate_color(i).astype(np.float32) / 255.0)
-        
-        # Create premultiplied color overlay
-        overlay = np.zeros((frame_height, frame_width, 3), dtype=np.float32)
-        for c in range(3):
-            overlay[:, :, c] = color[c] * layer_alpha
+            # Ensure mask is properly sized
+            mask_resized = cv2.resize(
+                mask_data.astype(np.uint8),
+                (frame_width, frame_height),
+                interpolation=cv2.INTER_NEAREST
+            ).astype(bool)
             
-        # Composite using premultiplied alpha
-        available_alpha = 1.0 - accumulated_alpha
-        layer_contribution = layer_alpha * available_alpha
-        accumulated_alpha += layer_contribution
-        
-        for c in range(3):
-            result[:, :, c] = result[:, :, c] * (1.0 - layer_contribution) + \
-                             overlay[:, :, c]
+            # Calculate this layer's alpha
+            base_alpha = ALPHA_BASE + (ALPHA_INCREMENT * (i / len(masks)))
+            
+            # Adjust alpha based on motion if needed
+            if motion_mask is not None:
+                layer_alpha = base_alpha * inverse_motion
+            else:
+                layer_alpha = np.full((frame_height, frame_width), base_alpha, 
+                                    dtype=np.float32)
+                
+            # Only apply alpha where mask exists
+            layer_alpha = layer_alpha * mask_resized
+            
+            # Create color overlay
+            color = np.array([1.0, 1.0, 1.0] if flag == 'stable' else 
+                            generate_color(i).astype(np.float32) / 255.0)
+            
+            # Create premultiplied color overlay
+            overlay = np.zeros((frame_height, frame_width, 3), dtype=np.float32)
+            for c in range(3):
+                overlay[:, :, c] = color[c] * layer_alpha
+                
+            # Composite using premultiplied alpha
+            available_alpha = 1.0 - accumulated_alpha
+            layer_contribution = layer_alpha * available_alpha
+            accumulated_alpha += layer_contribution
+            
+            for c in range(3):
+                result[:, :, c] = result[:, :, c] * (1.0 - layer_contribution) + \
+                                 overlay[:, :, c]
+                                 
+        except Exception as e:
+            print(f"Error processing mask {i}: {str(e)}")
+            continue
     
     # Ensure final result is properly bounded and converted back to uint8
     result = np.clip(result * 255.0, 0, 255).astype(np.uint8)
     
     # Draw contours
-    for i, (mask, flag) in enumerate(zip(masks, mask_flags)):
-        mask_uint8 = cv2.resize(
-            mask.astype(np.uint8),
-            (frame_width, frame_height),
-            interpolation=cv2.INTER_NEAREST
-        ) * 255
-        
-        contours, _ = cv2.findContours(
-            mask_uint8, 
-            cv2.RETR_EXTERNAL, 
-            cv2.CHAIN_APPROX_SIMPLE
-        )
-        
-        # Only draw contours where motion is minimal
-        contour_color = [0, 0, 0] if flag == 'stable' else \
-                       generate_color(i).tolist()
-        cv2.drawContours(result, contours, -1, contour_color, 1)
+    for i, (physics_mask, flag) in enumerate(zip(masks, mask_flags)):
+        try:
+            # Access the underlying numpy array for contour detection
+            mask_data = physics_mask.mask
+            mask_uint8 = cv2.resize(
+                mask_data.astype(np.uint8),
+                (frame_width, frame_height),
+                interpolation=cv2.INTER_NEAREST
+            ) * 255
+            
+            contours, _ = cv2.findContours(
+                mask_uint8, 
+                cv2.RETR_EXTERNAL, 
+                cv2.CHAIN_APPROX_SIMPLE
+            )
+            
+            # Only draw contours where motion is minimal
+            contour_color = [0, 0, 0] if flag == 'stable' else \
+                           generate_color(i).tolist()
+            cv2.drawContours(result, contours, -1, contour_color, 1)
+            
+        except Exception as e:
+            print(f"Error drawing contours for mask {i}: {str(e)}")
+            continue
     
     return result
 
