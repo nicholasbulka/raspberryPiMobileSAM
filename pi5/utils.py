@@ -53,6 +53,9 @@ perf_stats = {
     'cpu_temps': deque(maxlen=PERF_WINDOW_SIZE)
 }
 
+# Global state for performance monitoring
+last_log_time = time.time()  # Initialize with current time
+
 # Motion tracking state
 prev_gray = None
 prev_points = None
@@ -154,19 +157,20 @@ def detect_motion(current_frame, previous_frame):
         if not np.any(valid_mask):
             return None, current_frame, 0.0
             
-        curr_valid = curr_points[valid_mask]
-        prev_valid = prev_points[valid_mask]
+        # Reshape points to remove the middle dimension (N, 1, 2) -> (N, 2)
+        curr_valid = curr_points[valid_mask].reshape(-1, 2)
+        prev_valid = prev_points[valid_mask].reshape(-1, 2)
         
         # Calculate motion vectors
-        motion_vectors = curr_valid - prev_valid
-        distances = np.sqrt(np.sum(motion_vectors**2, axis=1))
+        motion_vectors = curr_valid - prev_valid  # Shape: (N, 2)
+        distances = np.sqrt(np.sum(motion_vectors**2, axis=1))  # Shape: (N,)
         
         # Create motion contours for significant motion
         motion_contours = []
-        significant_motion = distances > MIN_MOTION_DISTANCE
+        significant_motion = distances > MIN_MOTION_DISTANCE  # Shape: (N,)
         if np.any(significant_motion):
             # Create point pairs for contour creation
-            moving_curr = curr_valid[significant_motion]
+            moving_curr = curr_valid[significant_motion]  # Now shapes match
             moving_prev = prev_valid[significant_motion]
             
             # Convert points to contour format

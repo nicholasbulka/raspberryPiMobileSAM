@@ -124,12 +124,13 @@ def process_frames():
                     continue
 
                 # Detect motion between frames
-                motion_mask, motion_intensity = detect_motion(frame_to_process, previous_frame)
+                motion_contours, debug_frame, motion_intensity = detect_motion(frame_to_process, previous_frame)
                 
                 # Update shared state with processing results
                 with state.frame_lock:
-                    state.raw_processed_frame = frame_to_process.copy()
-                    state.motion_mask = motion_mask
+                    # Use debug frame to see what's being detected
+                    state.raw_processed_frame = debug_frame if debug_frame is not None else frame_to_process.copy()
+                    state.motion_contours = motion_contours
                 print("Frame processing complete")
 
                 # Update timing statistics
