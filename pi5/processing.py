@@ -1,4 +1,14 @@
 # processing.py
+#
+# This module handles the core frame processing pipeline, including:
+# - Frame capture from the camera
+# - Motion detection and analysis
+# - Mask inference and tracking
+# - Effect application
+#
+# The processing pipeline is split into separate threads to maximize performance
+# on multi-core systems while maintaining real-time processing capabilities.
+
 import cv2
 import numpy as np
 import time
@@ -7,45 +17,56 @@ from picamera2 import Picamera2
 
 from utils import (
     perf_stats, INPUT_SIZE, POINTS_PER_SIDE,
-    generate_visualization, get_cpu_temp, log_performance_stats,
+    get_cpu_temp, log_performance_stats,
     update_mask_tracking, detect_motion
 )
 import shared_state as state
 from effects import apply_effect
 
 def capture_frames():
-    """Continuously capture frames from the camera and update the current frame in shared state."""
+    """
+    Continuously capture frames from the camera and update the current frame in shared state.
+    This function runs in its own thread and handles all camera interaction.
+    
+    The captured frames are stored in shared state for access by other processing threads.
+    Frame capture is rate-limited to avoid overwhelming the system.
+    """
     last_capture_time = time.time()
     
     try:
+        # Initialize camera with optimal settings for our use case
         state.picam2 = Picamera2()
         preview_config = state.picam2.create_preview_configuration(
             main={"size": INPUT_SIZE},
-            buffer_count=4
+            buffer_count=4  # Increased buffer for smoother capture
         )
         state.picam2.configure(preview_config)
         state.picam2.start()
 
         while True:
             try:
+                # Capture new frame from camera
                 frame = state.picam2.capture_array("main")
                 current_time = time.time()
                 perf_stats['frame_intervals'].append(current_time - last_capture_time)
                 last_capture_time = current_time
                 
+                # Convert to BGR for OpenCV compatibility
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 
+                # Apply camera flips if enabled
                 if state.camera_flipped_h:
                     frame = cv2.flip(frame, 1)
                 if state.camera_flipped_v:
                     frame = cv2.flip(frame, 0)
                 
+                # Update shared state with thread safety
                 with state.frame_lock:
                     if state.current_frame is not None:
                         state.previous_frame = state.current_frame.copy()
                     state.current_frame = frame.copy()
                 
-                # Sleep to cap at 60 FPS for capture
+                # Rate limit to 60 FPS maximum
                 time.sleep(max(0, (1/60) - (time.time() - current_time)))
                 
             except Exception as e:
@@ -60,11 +81,21 @@ def capture_frames():
             state.picam2.stop()
 
 def process_frames():
-    """Process frames with current masks and apply visualizations."""
+    """
+    Process captured frames with motion detection and prepare them for visualization.
+    This function runs in its own thread and handles the core frame processing pipeline.
+    
+    The processing steps include:
+    1. Motion detection between consecutive frames
+    2. Statistics collection and logging
+    3. Frame processing for effects
+    
+    Processed frames are stored in shared state for the renderer to consume.
+    """
     print("Starting process frames thread")
     
     last_process_time = time.time()
-    target_interval = 1/30  # 30 FPS target
+    target_interval = 1/30  # Target 30 FPS for processing
 
     print("Waiting for first frame...")
     while state.current_frame is None:
@@ -74,68 +105,38 @@ def process_frames():
     try:
         while True:
             try:
+                # Get the latest frame with thread safety
                 with state.frame_lock:
                     if state.current_frame is None:
                         continue
                     frame_to_process = state.current_frame.copy()
                     previous_frame = state.previous_frame.copy() if state.previous_frame is not None else None
-                    current_masks = state.current_masks
-                    current_scores = state.mask_scores
 
+                # Track processing performance
                 process_start_time = time.time()
                 perf_stats['cpu_temps'].append(get_cpu_temp())
                 
+                # Rate limit processing
                 current_time = time.time()
                 time_since_last = current_time - last_process_time
-
                 if time_since_last < target_interval:
                     time.sleep(target_interval - time_since_last)
                     continue
 
-                # Detect motion
+                # Detect motion between frames
                 motion_mask, motion_intensity = detect_motion(frame_to_process, previous_frame)
                 
-                # Generate visualization with current masks and scores
-                print("Generating visualization...")
-                result = generate_visualization(frame_to_process, current_masks, current_scores)
-                
-                if motion_mask is not None:
-                    print("\nDEBUG: Testing blending with artificial pattern")
-                    
-                    # Create a test pattern - a vertical stripe in the middle
-                    test_mask = np.zeros((180, 320), dtype=np.float32)
-                    # Make middle third of the image fully visible from original frame
-                    test_mask[:, 107:214] = 1.0
-                    
-                    # Use our same reshaping operations
-                    test_mask = test_mask[..., np.newaxis]
-                    test_mask = np.repeat(test_mask, 3, axis=2)
-                    
-                    # Convert to float32 for calculations
-                    result = result.astype(np.float32)
-                    frame_to_process = frame_to_process.astype(np.float32)
-                    
-                    print("Test pattern statistics:")
-                    print(f"Test mask shape: {test_mask.shape}")
-                    print(f"Test mask unique values: {np.unique(test_mask)}")
-                    print(f"Number of ones in test mask: {np.count_nonzero(test_mask)}")
-                    
-                    # Do the blending with our test pattern
-                    result = (result * (1.0 - test_mask) + frame_to_process * test_mask).astype(np.uint8)
-                    
-                    print("\nBlending result statistics:")
-                    print(f"Result min/max: {result.min()}, {result.max()}")
-                    
+                # Update shared state with processing results
                 with state.frame_lock:
-                    state.raw_processed_frame = result.copy()
-                    state.processed_frame = result.copy()
+                    state.raw_processed_frame = frame_to_process.copy()
                     state.motion_mask = motion_mask
-                print("Visualization and motion processing complete")
+                print("Frame processing complete")
 
+                # Update timing statistics
                 last_process_time = current_time
                 perf_stats['total_process_times'].append(time.time() - process_start_time)
                 
-                # Log performance stats
+                # Log performance statistics
                 log_performance_stats()
 
             except Exception as e:
@@ -148,7 +149,17 @@ def process_frames():
         traceback.print_exc()
 
 def apply_effects_loop():
-    """Apply visual effects to the processed frame using current masks."""
+    """
+    Apply visual effects to processed frames using current masks.
+    This function runs in its own thread and handles all effect processing.
+    
+    Effects are applied based on:
+    1. The currently selected effect
+    2. The current mask state
+    3. Motion detection results
+    
+    The results are stored in shared state for the renderer to consume.
+    """
     print("Starting effects loop")
     while True:
         current_time = time.time()
@@ -159,6 +170,7 @@ def apply_effects_loop():
                 print(f"Has raw frame: {state.raw_processed_frame is not None}")
                 print(f"Has masks: {state.current_masks is not None}")
                 
+                # Get current state with thread safety
                 with state.frame_lock:
                     if state.current_masks is not None:
                         print(f"Masks shape: {state.current_masks.shape}")
@@ -168,25 +180,17 @@ def apply_effects_loop():
                         frame_to_process = state.raw_processed_frame.copy()
                         masks_for_effect = state.current_masks
                         
-                        # Apply effect
-                        result = apply_effect(frame_to_process, state.current_effect, state.effect_params, masks_for_effect)
+                        # Apply the selected effect
+                        result = apply_effect(frame_to_process, state.current_effect, 
+                                           state.effect_params, masks_for_effect)
                         
-                        # Let motion break through the effect
-                        if state.motion_mask is not None:
-                            original_frame = state.current_frame.copy()
-                            result = cv2.addWeighted(
-                                result,
-                                1 - state.motion_mask,
-                                original_frame,
-                                state.motion_mask,
-                                0
-                            )
-                        
+                        # Store result in shared state
                         state.processed_frame = result
                     else:
                         print("No raw frame available")
 
-            time.sleep(max(0, (1/60) - (time.time() - current_time)))  # Cap effects at 60 FPS
+            # Rate limit effect processing to 60 FPS
+            time.sleep(max(0, (1/60) - (time.time() - current_time)))
 
         except Exception as e:
             print(f"Effects error: {e}")
@@ -194,12 +198,24 @@ def apply_effects_loop():
             time.sleep(0.1)
 
 def inference_loop(sam):
-    """Run inference on frames and update mask tracking."""
-    # Use smaller size for inference to maintain performance
+    """
+    Run continuous mask inference on processed frames.
+    This function runs in its own thread and handles all model inference.
+    
+    The inference process includes:
+    1. Frame preprocessing for the model
+    2. Running the SAM model
+    3. Post-processing masks
+    4. Updating mask tracking statistics
+    
+    Args:
+        sam: The initialized MobileSAM model instance
+    """
+    # Configure inference parameters
     h, w = (180, 320)  # Reduced size for inference while keeping aspect ratio
     
-    # Pre-calculate grid points for larger size
-    points_per_side = POINTS_PER_SIDE  # Increase from 4 to get more detailed segments
+    # Pre-calculate grid points for prompting
+    points_per_side = POINTS_PER_SIDE
     x = np.linspace(0, w, points_per_side)
     y = np.linspace(0, h, points_per_side)
     xv, yv = np.meshgrid(x, y)
@@ -213,19 +229,20 @@ def inference_loop(sam):
 
     while True:
         try:
+            # Get the latest frame with thread safety
             with state.frame_lock:
                 if state.current_frame is None:
                     time.sleep(0.1)
                     continue
                 frame_to_process = state.current_frame.copy()
 
-            # Resize frame
+            # Preprocess frame
             t_resize_start = time.time()
             frame_small = cv2.resize(frame_to_process, (w, h), interpolation=cv2.INTER_LINEAR)
             frame_rgb = cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB)
             perf_stats['resize_times'].append(time.time() - t_resize_start)
 
-            # Update embedding
+            # Get frame embedding
             t_embed_start = time.time()
             state.predictor.set_image(frame_rgb)
             state.image_embedding = state.predictor.get_image_embedding().cpu().numpy()
@@ -255,7 +272,9 @@ def inference_loop(sam):
             inference_time = time.time() - t_inference_start
             perf_stats['inference_times'].append(inference_time)
 
+            # Process inference results
             if masks is not None and len(masks) > 0:
+                # Select top masks by score
                 top_mask_indices = np.argsort(scores[0])[-2:]
                 print(f"Selected top {len(top_mask_indices)} masks")
                 
@@ -277,13 +296,13 @@ def inference_loop(sam):
                 # Convert to numpy array for consistent handling
                 resized_masks = np.array(resized_masks)
                 
-                # Update tracking before we update the shared state
+                # Update mask tracking
                 update_mask_tracking(resized_masks)
                 
                 # Update shared state with thread safety
                 with state.frame_lock:
                     state.current_masks = resized_masks
-                    state.mask_scores = scores[0][top_mask_indices]  # Only keep scores for top masks
+                    state.mask_scores = scores[0][top_mask_indices]
                     print(f"Updated current masks: {state.current_masks.shape}")
                     print(f"Current mask flags: {state.mask_flags}")
                     print(f"Stability counters: {state.mask_stability_counters}")

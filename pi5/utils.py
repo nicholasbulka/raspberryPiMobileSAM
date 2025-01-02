@@ -10,32 +10,37 @@ import traceback
 import shared_state as state
 
 # Constants for optimization
-INPUT_SIZE = (320,180)  # Camera capture size (increased)
-PROCESS_SIZE = (320, 180)  # SAM processing size (unchanged)
+INPUT_SIZE = (320,180)  # Camera capture size
+PROCESS_SIZE = (320, 180)  # Processing size
 MAX_MASKS = 3  # Maximum number of masks to process
 VISUALIZATION_SCALE = 1.0  # No downscaling for visualization
-POINTS_PER_SIDE = 8  # Increased points for better coverage
+POINTS_PER_SIDE = 8  # Points for coverage
 TARGET_FPS = 20  # Target FPS for processing
+DEBUG_FEATURES = True  # Enable feature point visualization
 
-# Motion detection constants
+# Feature detection parameters
 FEATURE_PARAMS = dict(
-    maxCorners=100,
-    qualityLevel=0.3,
-    minDistance=7,
-    blockSize=7
+    maxCorners=300,       # Number of points to detect
+    qualityLevel=0.1,     # Minimum quality threshold (lower means more points)
+    minDistance=3,        # Minimum distance between points
+    blockSize=5           # Size of blocks for corner detection
 )
+
+# Optical flow parameters
 LK_PARAMS = dict(
-    winSize=(15, 15),
-    maxLevel=2,
+    winSize=(15, 15),     # Size of search window for each pyramid level
+    maxLevel=3,           # Number of pyramid levels
     criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
 )
-MIN_MOTION_DISTANCE = 0.5  # Reduced: Minimum pixel distance to consider as motion
-MOTION_BLUR_SIZE = 31   # Increased: Size of Gaussian blur for motion mask
-MOTION_THRESHOLD = 0.05  # Reduced: Threshold for motion intensity
+
+# Motion tracking parameters
+MIN_MOTION_DISTANCE = 0.5   # Minimum distance to consider as motion
+MOTION_DECAY = 0.8         # How quickly motion fades out
+MOTION_THRESHOLD = 0.1     # Threshold for significant motion
 
 # Performance monitoring constants
-PERF_WINDOW_SIZE = 100  # Number of frames to keep stats for
-LOG_INTERVAL = 5.0  # Seconds between logging performance stats
+PERF_WINDOW_SIZE = 100
+LOG_INTERVAL = 5.0
 
 # Performance monitoring variables
 perf_stats = {
@@ -48,79 +53,150 @@ perf_stats = {
     'cpu_temps': deque(maxlen=PERF_WINDOW_SIZE)
 }
 
-last_log_time = time.time()
+# Motion tracking state
+prev_gray = None
+prev_points = None
+motion_history = None
+
+def create_debug_frame(frame, curr_points, prev_points, motion_vectors=None, motion_areas=None):
+    """
+    Create a debug visualization showing feature detection and tracking.
+    
+    Args:
+        frame: Original frame
+        curr_points: Current detected feature points
+        prev_points: Previous frame's feature points
+        motion_vectors: Optional motion vector information
+        motion_areas: Optional motion area contours
+    
+    Returns:
+        Frame with debug visualization overlaid
+    """
+    debug_frame = frame.copy()
+    
+    # Draw all detected feature points
+    if curr_points is not None:
+        for point in curr_points:
+            x, y = point.ravel()
+            # Green circle for current points
+            cv2.circle(debug_frame, (int(x), int(y)), 2, (0, 255, 0), -1)
+    
+    # Draw motion tracking information
+    if prev_points is not None and motion_vectors is not None:
+        for (curr, prev, motion) in zip(curr_points, prev_points, motion_vectors):
+            x1, y1 = prev.ravel()
+            x2, y2 = curr.ravel()
+            
+            # Only draw significant motion
+            if np.sqrt(motion[0]**2 + motion[1]**2) > MIN_MOTION_DISTANCE:
+                # Red circle for previous position
+                cv2.circle(debug_frame, (int(x1), int(y1)), 2, (0, 0, 255), -1)
+                # Yellow line showing motion vector
+                cv2.line(debug_frame, (int(x1), int(y1)), (int(x2), int(y2)), 
+                        (0, 255, 255), 1)
+    
+    # Draw motion areas if available
+    if motion_areas is not None:
+        # Blue contours for motion areas
+        cv2.drawContours(debug_frame, motion_areas, -1, (255, 0, 0), 1)
+    
+    # Add feature count to debug frame
+    if curr_points is not None:
+        cv2.putText(debug_frame, f"Features: {len(curr_points)}", (10, 20),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+    
+    return debug_frame
 
 def detect_motion(current_frame, previous_frame):
     """
-    Detect motion using optical flow and feature tracking.
-    Returns a motion mask and motion intensity.
+    Detect motion using feature tracking and optical flow.
+    Now includes visual debugging of feature detection and tracking.
+    
+    Args:
+        current_frame: Current video frame
+        previous_frame: Previous video frame
+    
+    Returns:
+        tuple: (motion_contours, debug_frame, motion_intensity)
+        - motion_contours contains areas of detected motion
+        - debug_frame shows feature detection visualization
+        - motion_intensity indicates overall amount of motion
     """
+    global prev_gray, prev_points, motion_history
+    
     if previous_frame is None:
-        return None, 0.0
+        return None, None, 0.0
 
     try:
         # Convert frames to grayscale
         curr_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
-        prev_gray = cv2.cvtColor(previous_frame, cv2.COLOR_BGR2GRAY)
-
-        # Detect good features to track
-        prev_points = cv2.goodFeaturesToTrack(prev_gray, mask=None, **FEATURE_PARAMS)
-        if prev_points is None:
-            return None, 0.0
-
+        
+        # Initialize or update feature points
+        if prev_gray is None:
+            prev_gray = curr_gray.copy()
+            prev_points = cv2.goodFeaturesToTrack(prev_gray, mask=None, **FEATURE_PARAMS)
+            motion_history = np.zeros_like(curr_gray, dtype=np.float32)
+            return None, current_frame, 0.0
+        
+        # Detect new feature points if needed
+        if prev_points is None or len(prev_points) < 10:  # Minimum number of points
+            prev_points = cv2.goodFeaturesToTrack(prev_gray, mask=None, **FEATURE_PARAMS)
+            if prev_points is None:
+                return None, current_frame, 0.0
+        
         # Calculate optical flow
         curr_points, status, error = cv2.calcOpticalFlowPyrLK(
             prev_gray, curr_gray, prev_points, None, **LK_PARAMS
         )
-
-        # Filter out points where flow wasn't found
-        good_curr = curr_points[status == 1]
-        good_prev = prev_points[status == 1]
-
-        # Calculate motion distances
-        if len(good_curr) == 0 or len(good_prev) == 0:
-            return None, 0.0
-
-        # Calculate motion distances and normalize them
-        motion_distances = np.sqrt(np.sum((good_curr - good_prev) ** 2, axis=1))
-        max_distance = np.max(motion_distances)
-        if max_distance > 0:
-            normalized_distances = motion_distances / max_distance
-        else:
-            return None, 0.0
-
-        # Create motion mask with continuous values
-        motion_mask = np.zeros_like(curr_gray, dtype=np.float32)
         
-        # Add motion points to mask with distance-based intensity
-        for (x, y), distance in zip(good_curr, normalized_distances):
-            # Use the normalized distance as intensity
-            cv2.circle(
-                motion_mask, 
-                (int(x), int(y)), 
-                int(MOTION_BLUR_SIZE/2),  # Increased radius for better coverage
-                distance,  # Use normalized distance as intensity
-                -1  # Fill the circle
-            )
-
-        # Apply Gaussian blur for smooth transitions
-        motion_mask = cv2.GaussianBlur(motion_mask, (MOTION_BLUR_SIZE, MOTION_BLUR_SIZE), 0)
+        # Filter valid points
+        valid_mask = status.ravel() == 1
+        if not np.any(valid_mask):
+            return None, current_frame, 0.0
+            
+        curr_valid = curr_points[valid_mask]
+        prev_valid = prev_points[valid_mask]
         
-        # Normalize the blurred mask
-        motion_mask = cv2.normalize(motion_mask, None, 0, 1, cv2.NORM_MINMAX)
+        # Calculate motion vectors
+        motion_vectors = curr_valid - prev_valid
+        distances = np.sqrt(np.sum(motion_vectors**2, axis=1))
         
-        # Apply threshold but maintain float values
-        motion_mask = np.where(motion_mask > MOTION_THRESHOLD, motion_mask, 0)
-
-        # Calculate overall motion intensity as mean of significant motion
-        motion_intensity = np.mean(motion_distances)
-
-        return motion_mask, motion_intensity
+        # Create motion contours for significant motion
+        motion_contours = []
+        significant_motion = distances > MIN_MOTION_DISTANCE
+        if np.any(significant_motion):
+            # Create point pairs for contour creation
+            moving_curr = curr_valid[significant_motion]
+            moving_prev = prev_valid[significant_motion]
+            
+            # Convert points to contour format
+            if len(moving_curr) >= 3:  # Need at least 3 points for a contour
+                hull = cv2.convexHull(moving_curr.astype(np.float32))
+                if hull is not None:
+                    motion_contours = [hull.astype(np.int32)]
+        
+        # Create debug visualization
+        debug_frame = create_debug_frame(
+            current_frame, 
+            curr_valid, 
+            prev_valid, 
+            motion_vectors,
+            motion_contours
+        )
+        
+        # Update previous frame state
+        prev_gray = curr_gray.copy()
+        prev_points = cv2.goodFeaturesToTrack(curr_gray, mask=None, **FEATURE_PARAMS)
+        
+        # Calculate motion intensity
+        motion_intensity = np.mean(distances) if len(distances) > 0 else 0.0
+        
+        return motion_contours, debug_frame, motion_intensity
 
     except Exception as e:
         print(f"Error in motion detection: {str(e)}")
         traceback.print_exc()
-        return None, 0.0
+        return None, current_frame, 0.0
 
 def compare_masks(mask1, mask2):
     """
