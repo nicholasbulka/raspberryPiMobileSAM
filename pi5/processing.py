@@ -8,7 +8,7 @@ from picamera2 import Picamera2
 from utils import (
     perf_stats, INPUT_SIZE, POINTS_PER_SIDE,
     generate_visualization, get_cpu_temp, log_performance_stats,
-    update_mask_tracking
+    update_mask_tracking, detect_motion
 )
 import shared_state as state
 from effects import apply_effect
@@ -41,6 +41,8 @@ def capture_frames():
                     frame = cv2.flip(frame, 0)
                 
                 with state.frame_lock:
+                    if state.current_frame is not None:
+                        state.previous_frame = state.current_frame.copy()
                     state.current_frame = frame.copy()
                 
                 # Sleep to cap at 60 FPS for capture
@@ -76,6 +78,7 @@ def process_frames():
                     if state.current_frame is None:
                         continue
                     frame_to_process = state.current_frame.copy()
+                    previous_frame = state.previous_frame.copy() if state.previous_frame is not None else None
                     current_masks = state.current_masks
                     current_scores = state.mask_scores
 
@@ -89,14 +92,45 @@ def process_frames():
                     time.sleep(target_interval - time_since_last)
                     continue
 
+                # Detect motion
+                motion_mask, motion_intensity = detect_motion(frame_to_process, previous_frame)
+                
                 # Generate visualization with current masks and scores
                 print("Generating visualization...")
                 result = generate_visualization(frame_to_process, current_masks, current_scores)
                 
+                if motion_mask is not None:
+                    print("\nDEBUG: Testing blending with artificial pattern")
+                    
+                    # Create a test pattern - a vertical stripe in the middle
+                    test_mask = np.zeros((180, 320), dtype=np.float32)
+                    # Make middle third of the image fully visible from original frame
+                    test_mask[:, 107:214] = 1.0
+                    
+                    # Use our same reshaping operations
+                    test_mask = test_mask[..., np.newaxis]
+                    test_mask = np.repeat(test_mask, 3, axis=2)
+                    
+                    # Convert to float32 for calculations
+                    result = result.astype(np.float32)
+                    frame_to_process = frame_to_process.astype(np.float32)
+                    
+                    print("Test pattern statistics:")
+                    print(f"Test mask shape: {test_mask.shape}")
+                    print(f"Test mask unique values: {np.unique(test_mask)}")
+                    print(f"Number of ones in test mask: {np.count_nonzero(test_mask)}")
+                    
+                    # Do the blending with our test pattern
+                    result = (result * (1.0 - test_mask) + frame_to_process * test_mask).astype(np.uint8)
+                    
+                    print("\nBlending result statistics:")
+                    print(f"Result min/max: {result.min()}, {result.max()}")
+                    
                 with state.frame_lock:
                     state.raw_processed_frame = result.copy()
                     state.processed_frame = result.copy()
-                print("Visualization applied to frame")
+                    state.motion_mask = motion_mask
+                print("Visualization and motion processing complete")
 
                 last_process_time = current_time
                 perf_stats['total_process_times'].append(time.time() - process_start_time)
@@ -133,7 +167,21 @@ def apply_effects_loop():
                     if state.raw_processed_frame is not None:
                         frame_to_process = state.raw_processed_frame.copy()
                         masks_for_effect = state.current_masks
+                        
+                        # Apply effect
                         result = apply_effect(frame_to_process, state.current_effect, state.effect_params, masks_for_effect)
+                        
+                        # Let motion break through the effect
+                        if state.motion_mask is not None:
+                            original_frame = state.current_frame.copy()
+                            result = cv2.addWeighted(
+                                result,
+                                1 - state.motion_mask,
+                                original_frame,
+                                state.motion_mask,
+                                0
+                            )
+                        
                         state.processed_frame = result
                     else:
                         print("No raw frame available")

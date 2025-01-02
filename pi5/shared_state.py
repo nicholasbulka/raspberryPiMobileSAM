@@ -6,11 +6,11 @@ import numpy as np
 frame_lock = threading.Lock()
 effect_lock = threading.Lock()
 current_frame = None
+previous_frame = None  # Added for motion detection
+motion_mask = None     # Added for motion detection
 raw_processed_frame = None
 processed_frame = None
 current_masks = None
-cached_masks = None
-cached_scores = None
 current_effect = None
 camera_flipped_h = False
 camera_flipped_v = False
