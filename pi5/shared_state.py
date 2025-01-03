@@ -27,6 +27,7 @@ previous_masks = None     # Previous frame's masks for tracking
 mask_change_scores = []   # Track mask changes between frames
 mask_stability_counters = []  # Count frames of mask stability
 mask_flags = []          # Flags for each mask (e.g., 'stable', 'dynamic')
+last_update_time = None   # Last time masks were updated
 
 # Camera configuration
 camera_flipped_h = False   # Horizontal flip state
@@ -48,9 +49,9 @@ STABILITY_COUNT_THRESHOLD = 2     # How many stable iterations before flagging
 MASK_THRESHOLD_ADJUSTMENT = -0.4  # Adjustment to MobileSAM threshold
 
 # Constants for optimization
-INPUT_SIZE = (640,360)  # Camera capture size
-PROCESS_SIZE = (640,360)  # Processing size
-POINTS_PER_SIDE = 8
+INPUT_SIZE = (320,180)  # Camera capture size
+PROCESS_SIZE = (320,180)  # Processing size
+POINTS_PER_SIDE = 6
 
 # Physics parameters
 MOTION_FORCE_SCALE = 2.0  # Scale factor for motion forces

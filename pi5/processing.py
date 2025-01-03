@@ -16,11 +16,94 @@ from mask import update_mask_tracking, create_physics_mask
 from effects import apply_effect
 import shared_state as state
 
+DEBUG_MODE = False
+
+def separate_objects(masks: np.ndarray,
+                    scores: np.ndarray,
+                    min_size: int = 100,
+                    max_size: int = 45000,
+                    min_confidence: float = 0.4,
+                    iou_threshold: float = 0.1  # Lowered from 0.2 to allow more objects
+                    ) -> List[np.ndarray]:
+    """
+    Separate individual objects using connected components analysis.
+    """
+    if masks is None or len(masks) == 0:
+        print("No masks received in separate_objects")
+        return []
+    
+    print(f"\nMask Debug:")
+    print(f"Received masks shape: {masks.shape}")
+    print(f"Scores shape: {scores.shape}")
+    print(f"Scores: {scores[0]}")
+    
+    object_masks = []
+    total_pixels = masks[0][0].shape[0] * masks[0][0].shape[1]
+    
+    # Process each mask proposal
+    for i in range(masks.shape[1]):
+        if scores[0][i] < min_confidence:
+            continue
+            
+        current_mask = masks[0][i]
+        print(f"\nProcessing mask {i} with score {scores[0][i]}")
+        
+        # Find connected components
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            current_mask.astype(np.uint8),
+            connectivity=4  # Changed from 8 to 4 for stricter connectivity
+        )
+        
+        print(f"Found {num_labels-1} connected components")
+        
+        # Process each component
+        for label in range(1, num_labels):
+            component_mask = (labels == label)
+            component_size = np.sum(component_mask)
+            size_percentage = (component_size / total_pixels) * 100
+            
+            print(f"  Component {label}: size={component_size} ({size_percentage:.1f}% of frame)")
+            
+            # Skip if component is too small or too large
+            if component_size < min_size or component_size > max_size:
+                print(f"    Skipping: size outside bounds ({min_size}-{max_size})")
+                continue
+                
+            # Get component bounds
+            y_indices, x_indices = np.where(component_mask)
+            if len(y_indices) == 0 or len(x_indices) == 0:
+                continue
+                
+            x1, y1 = np.min(x_indices), np.min(y_indices)
+            x2, y2 = np.max(x_indices), np.max(y_indices)
+            
+            # Skip if component touches edges
+            if (y1 == 0 or y2 == component_mask.shape[0]-1 or
+                x1 == 0 or x2 == component_mask.shape[1]-1):
+                print("    Skipping: touches frame edge")
+                continue
+            
+            # Check overlap with existing masks
+            is_unique = True
+            for existing_mask in object_masks:
+                intersection = np.logical_and(component_mask, existing_mask)
+                union = np.logical_or(component_mask, existing_mask)
+                iou = intersection.sum() / union.sum() if union.sum() > 0 else 0
+                
+                if iou > iou_threshold:
+                    print(f"    Skipping: overlaps with existing mask (IoU={iou:.2f})")
+                    is_unique = False
+                    break
+            
+            if is_unique:
+                print("    Accepting component")
+                object_masks.append(component_mask)
+    
+    print(f"Found {len(object_masks)} valid masks")
+    return object_masks
+
 def capture_frames() -> None:
-    """
-    Continuously capture frames from the camera with enhanced error handling
-    and performance optimization.
-    """
+    """Continuously capture frames from the camera."""
     last_capture_time = time.time()
     
     try:
@@ -88,81 +171,17 @@ def capture_frames() -> None:
             state.picam2.stop()
             print("Camera stopped")
 
-def separate_objects(masks: np.ndarray,
-                    scores: np.ndarray,
-                    min_size: int = 100,
-                    min_confidence: float = 0.5,
-                    iou_threshold: float = 0.5) -> List[np.ndarray]:
-    """
-    Separate individual objects from mask proposals with improved filtering.
-    
-    Args:
-        masks: Array of mask proposals
-        scores: Confidence scores for masks
-        min_size: Minimum object size in pixels
-        min_confidence: Minimum confidence score
-        iou_threshold: IoU threshold for overlap
-    
-    Returns:
-        List of unique object masks
-    """
-    if masks is None or len(masks) == 0:
-        return []
-    
-    # Initialize tracking
-    N = masks.shape[0]
-    object_masks = []
-    used_masks = set()
-    
-    # Sort by confidence
-    mask_indices = np.argsort(scores[0])[::-1]
-    
-    for i in mask_indices:
-        if i in used_masks or scores[0][i] < min_confidence:
-            continue
-        
-        current_mask = masks[0][i]
-        
-        # Size check
-        mask_size = np.sum(current_mask)
-        if mask_size < min_size:
-            continue
-        
-        # Check overlap with existing masks
-        is_unique = True
-        for existing_mask in object_masks:
-            intersection = np.logical_and(current_mask, existing_mask)
-            union = np.logical_or(current_mask, existing_mask)
-            iou = np.sum(intersection) / np.sum(union)
-            
-            if iou > iou_threshold:
-                is_unique = False
-                break
-        
-        if is_unique:
-            object_masks.append(current_mask)
-            used_masks.add(i)
-            
-            # Limit total number of masks
-            if len(object_masks) >= 5:
-                break
-    
-    return object_masks
-
 def inference_loop(sam) -> None:
-    """
-    Run continuous mask inference with enhanced debugging and optimization.
-    
-    Args:
-        sam: SAM model instance
-    """
+    """Run continuous mask inference with enhanced debugging."""
     print("Starting inference loop")
-    h, w = (120, 213)
+    
+    # Use dimensions from shared state
+    process_height, process_width = state.PROCESS_SIZE
     
     # Create fixed grid points
-    points_per_side = 6
-    x = np.linspace(0, w, points_per_side)
-    y = np.linspace(0, h, points_per_side)
+    points_per_side = state.POINTS_PER_SIDE
+    x = np.linspace(0, process_width, points_per_side)
+    y = np.linspace(0, process_height, points_per_side)
     xv, yv = np.meshgrid(x, y)
     fixed_points = np.stack([xv.flatten(), yv.flatten()], axis=1)
     
@@ -171,6 +190,9 @@ def inference_loop(sam) -> None:
     onnx_label = np.concatenate([np.ones(len(fixed_points)), np.array([-1])], axis=0)[None, :].astype(np.float32)
     onnx_mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
     onnx_has_mask_input = np.zeros(1, dtype=np.float32)
+
+    print(f"Initialized inference loop with dimensions: {process_width}x{process_height}")
+    print(f"Using {points_per_side}x{points_per_side} grid points")
 
     target_frame_time = 1/20  # Target 20 FPS for inference
     last_inference_time = time.time()
@@ -196,7 +218,7 @@ def inference_loop(sam) -> None:
                 frame_to_process = state.current_frame.copy()
             
             # Process frame
-            frame_small = cv2.resize(frame_to_process, (w, h))
+            frame_small = cv2.resize(frame_to_process, (process_width, process_height))
             frame_rgb = cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB)
             
             # Run SAM inference
@@ -229,6 +251,11 @@ def inference_loop(sam) -> None:
             
             # Process masks
             if masks is not None and np.sum(scores[0] > 0.5) > 0:
+                # Clear old inactive masks first
+                with state.frame_lock:
+                    if state.current_masks:
+                        state.current_masks = [m for m in state.current_masks if m.is_active]
+                
                 object_masks = separate_objects(masks, scores)
                 
                 if object_masks:
@@ -237,30 +264,43 @@ def inference_loop(sam) -> None:
                     physics_masks = []
                     
                     for object_mask in object_masks:
-                        # Resize mask
+                        # Resize mask to full frame size
                         mask_resized = cv2.resize(
                             object_mask.astype(np.uint8),
                             (frame_width, frame_height),
                             interpolation=cv2.INTER_NEAREST
                         ).astype(bool)
                         
-                        # Create physics mask
+                        # Create initial pixel content by masking the original frame
+                        pixel_content = np.zeros_like(frame_to_process)
+                        pixel_content[mask_resized] = frame_to_process[mask_resized]
+                        
+                        # Debug print pixel content
+                        print(f"Pixel content shape: {pixel_content.shape}")
+                        print(f"Non-zero pixels: {np.count_nonzero(pixel_content)}")
+                        print(f"Mask sum: {np.sum(mask_resized)}")
+                        
+                        # Create physics mask with pixel content
                         physics_mask = create_physics_mask(
                             mask_resized,
                             frame_to_process.shape[:2],
                             mass=1.0,
-                            friction=0.95
+                            friction=0.35,
+                            pixel_content=pixel_content
                         )
                         physics_masks.append(physics_mask)
                     
-                    # Update shared state
+                    # Update shared state - merge with existing active masks
                     with state.frame_lock:
-                        state.current_masks = physics_masks
-                        state.mask_scores = [1.0] * len(physics_masks)
+                        active_masks = [m for m in state.current_masks if m.is_active] if state.current_masks else []
+                        state.current_masks = active_masks + physics_masks
+                        state.mask_scores = [1.0] * len(state.current_masks)
                 else:
                     with state.frame_lock:
-                        state.current_masks = []
-                        state.mask_scores = None
+                        # Keep only active masks
+                        if state.current_masks:
+                            state.current_masks = [m for m in state.current_masks if m.is_active]
+                        state.mask_scores = [1.0] * len(state.current_masks) if state.current_masks else None
             
             last_inference_time = time.time()
             

@@ -5,6 +5,7 @@ import traceback
 from typing import Optional, List, Tuple
 import shared_state as state
 from colors import generate_color
+from mask import translate_and_rotate_mask, update_mask_content
 from mask_types import PhysicsMask
 
 # Visualization parameters
@@ -45,25 +46,47 @@ class MaskVisualizer:
                 cv2.LINE_AA
             )
     
-    def draw_velocity_vector(self, frame: np.ndarray, 
+    def draw_physics_vectors(self, frame: np.ndarray, 
                            mask: PhysicsMask, 
                            color: np.ndarray):
-        """Draw velocity vector for a mask."""
-        if abs(mask.dx) > VECTOR_MIN_MAGNITUDE or abs(mask.dy) > VECTOR_MIN_MAGNITUDE:
-            start_point = mask.center
-            end_point = (
-                int(start_point[0] + mask.dx * MOTION_VECTOR_SCALE),
-                int(start_point[1] + mask.dy * MOTION_VECTOR_SCALE)
-            )
+        """Draw velocity and angular velocity vectors."""
+        if not mask.is_active:
+            return
             
+        center = mask.center
+        
+        # Draw linear velocity vector
+        if abs(mask.dx) > VECTOR_MIN_MAGNITUDE or abs(mask.dy) > VECTOR_MIN_MAGNITUDE:
+            end_point = (
+                int(center[0] + mask.dx * MOTION_VECTOR_SCALE),
+                int(center[1] + mask.dy * MOTION_VECTOR_SCALE)
+            )
             cv2.arrowedLine(
                 frame,
-                start_point,
+                center,
                 end_point,
                 color.tolist(),
                 2,
                 cv2.LINE_AA,
                 tipLength=0.3
+            )
+        
+        # Draw angular velocity indicator
+        if abs(mask.angular_velocity) > 1.0:  # Only draw if rotating significantly
+            radius = 20  # Radius of rotation indicator
+            start_angle = mask.rotation
+            end_angle = start_angle + 30 * np.sign(mask.angular_velocity)
+            
+            cv2.ellipse(
+                frame,
+                center,
+                (radius, radius),
+                0,
+                start_angle,
+                end_angle,
+                color.tolist(),
+                2,
+                cv2.LINE_AA
             )
     
     def draw_debug_info(self, frame: np.ndarray, 
@@ -77,7 +100,7 @@ class MaskVisualizer:
         info_text = [
             f"ID: {mask_id}",
             f"Vel: ({mask.dx:.1f}, {mask.dy:.1f})",
-            f"Mass: {mask.mass:.1f}",
+            f"Ang: {mask.angular_velocity:.1f}°/s",
             f"KE: {mask.kinetic_energy:.1f}"
         ]
         
@@ -100,17 +123,7 @@ class MaskVisualizer:
 def create_mask_visualization(frame: np.ndarray,
                             masks: List[PhysicsMask],
                             mask_flags: Optional[List[str]] = None) -> np.ndarray:
-    """
-    Create enhanced visualization of physics-enabled masks.
-    
-    Args:
-        frame: Original video frame
-        masks: List of PhysicsMask objects
-        mask_flags: Optional list of mask state flags
-        
-    Returns:
-        Frame with mask visualization
-    """
+    """Create enhanced visualization of physics-enabled masks."""
     if not masks:
         return frame.copy()
     
@@ -132,43 +145,69 @@ def create_mask_visualization(frame: np.ndarray,
             # Generate consistent color for this mask
             color = generate_color(i).astype(np.float32) / 255.0
             
-            # Create mask overlay
-            mask_overlay = np.zeros((height, width, 3), dtype=np.float32)
-            mask_overlay[physics_mask.mask] = color
+            # Update pixel content for relatively stationary masks
+            if physics_mask.pixel_content is None:
+                update_mask_content(physics_mask, frame)
             
-            # Blend mask with frame
-            result = cv2.addWeighted(
-                result,
-                1.0,
-                mask_overlay,
-                MASK_OPACITY,
-                0
+            # Get transformed mask and content
+            transformed_mask, transformed_content = translate_and_rotate_mask(
+                physics_mask,
+                int(physics_mask.dx),
+                int(physics_mask.dy),
+                (height, width)
             )
             
+            if transformed_content is not None:
+                # Blend pixel content with opacity
+                mask_overlay = transformed_content.astype(np.float32) / 255.0
+                opacity = physics_mask.opacity
+                result = cv2.addWeighted(
+                    result,
+                    1.0,
+                    mask_overlay,
+                    opacity,
+                    0
+                )
+            else:
+                # Fallback to color overlay if no pixel content
+                mask_overlay = np.zeros((height, width, 3), dtype=np.float32)
+                mask_overlay[transformed_mask] = color
+                opacity = physics_mask.opacity * MASK_OPACITY
+                result = cv2.addWeighted(
+                    result,
+                    1.0,
+                    mask_overlay,
+                    opacity,
+                    0
+                )
+            
             # Draw mask border
-            mask_uint8 = physics_mask.mask.astype(np.uint8) * 255
+            mask_uint8 = transformed_mask.astype(np.uint8) * 255
             contours, _ = cv2.findContours(
                 mask_uint8,
                 cv2.RETR_EXTERNAL,
                 cv2.CHAIN_APPROX_SIMPLE
             )
             
+            # Scale border color by opacity
+            border_color = tuple((c * physics_mask.opacity).item() for c in color * 255)
+            
             cv2.drawContours(
                 result,
                 contours,
                 -1,
-                color.tolist(),
+                border_color,
                 MASK_BORDER_THICKNESS
             )
+            
+            # Draw physics visualization
+            visualizer.draw_physics_vectors(result, physics_mask, color * 255)
             
             # Update and draw motion trails
             visualizer.update_trails(i, physics_mask.center)
             visualizer.draw_motion_trails(result, i, color * 255)
             
-            # Draw velocity vector
-            visualizer.draw_velocity_vector(result, physics_mask, color * 255)
-            
-            # Draw debug information if enabled
+            # Draw debug info if enabled
             visualizer.draw_debug_info(result, physics_mask, i, color * 255)
     
     except Exception as e:

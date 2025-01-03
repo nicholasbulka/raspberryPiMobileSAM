@@ -4,31 +4,21 @@ from mask_types import PhysicsMask
 from typing import Tuple, Optional, List
 from dataclasses import dataclass
 
-# Physics constants
-VELOCITY_DAMPING = 0.92  # Higher value = less damping
-MINIMUM_FORCE = 0.5      # Minimum force to apply
-FORCE_SCALE = 2.5       # Scale factor for motion forces
-MOTION_AREA_THRESHOLD = 0.15  # Percentage of mask that must see motion
+# Physics constants - adjusted for more responsive motion
+VELOCITY_DAMPING = 0.85  # More damping (was 0.92)
+MINIMUM_FORCE = 0.3      # Lower minimum force for easier triggering
+FORCE_SCALE = 4.0       # Increased force scale (was 2.5)
+MOTION_AREA_THRESHOLD = 0.05  # Lower threshold for motion detection (was 0.15)
 EDGE_BUFFER = 5         # Buffer zone around mask bounds
 VELOCITY_MIN = 0.1      # Minimum velocity threshold
-MAX_VELOCITY = 15.0     # Maximum velocity cap
+MAX_VELOCITY = 25.0     # Increased max velocity (was 15.0)
 
 def detect_motion_collision(mask: PhysicsMask, flow: np.ndarray, 
                           magnitude: np.ndarray, angle: np.ndarray,
-                          threshold: float = 0.65) -> Tuple[float, float]:
+                          threshold: float = 0.45) -> Tuple[float, float]:  # Lower threshold for easier triggering
     """
     Enhanced motion collision detection that better handles independent mask physics.
     Returns forces to apply to the mask based on detected motion.
-    
-    Args:
-        mask: PhysicsMask object for collision detection
-        flow: Dense optical flow data
-        magnitude: Motion magnitude array
-        angle: Motion angle array
-        threshold: Motion detection threshold
-        
-    Returns:
-        Tuple of (dx, dy) forces to apply
     """
     # Get mask bounds with buffer zone
     x1, y1, x2, y2 = mask.bounds
@@ -66,29 +56,26 @@ def detect_motion_collision(mask: PhysicsMask, flow: np.ndarray,
     if len(flow_x) == 0 or len(flow_y) == 0:
         return 0.0, 0.0
     
-    # Calculate weighted average force
+    # Calculate weighted average force with increased influence
     avg_force_x = np.average(flow_x, weights=magnitude_weights)
     avg_force_y = np.average(flow_y, weights=magnitude_weights)
     
-    # Scale force by overlap ratio and mass
+    # Scale force by overlap ratio and mass with increased effect
     force_x = (avg_force_x * FORCE_SCALE * overlap_ratio) / mask.mass
     force_y = (avg_force_y * FORCE_SCALE * overlap_ratio) / mask.mass
     
-    # Apply minimum force threshold
-    if abs(force_x) < MINIMUM_FORCE:
-        force_x = 0
-    if abs(force_y) < MINIMUM_FORCE:
-        force_y = 0
-        
+    # Print debug info for significant forces
+    if abs(force_x) > MINIMUM_FORCE or abs(force_y) > MINIMUM_FORCE:
+        print(f"\nMotion collision detected:")
+        print(f"  Forces: ({force_x:.2f}, {force_y:.2f})")
+        print(f"  Overlap ratio: {overlap_ratio:.2f}")
+        print(f"  Magnitude mean: {np.mean(magnitude_weights):.2f}")
+    
     return force_x, force_y
 
 def update_mask_physics(mask: PhysicsMask, frame_size: Tuple[int, int]) -> None:
     """
     Update mask physics with improved velocity handling and boundary checking.
-    
-    Args:
-        mask: PhysicsMask object to update
-        frame_size: (height, width) of the frame
     """
     height, width = frame_size
     
@@ -118,9 +105,11 @@ def update_mask_physics(mask: PhysicsMask, frame_size: Tuple[int, int]) -> None:
     mask_width = x2 - x1
     mask_height = y2 - y1
     
-    # Check if mask is leaving the frame
-    if (new_x + mask_width < 0 or new_x > width or 
-        new_y + mask_height < 0 or new_y > height):
+    # Check if mask is leaving the frame - be more aggressive about cleanup
+    margin = max(mask_width, mask_height) // 2
+    if (new_x + margin < 0 or new_x - margin > width or 
+        new_y + margin < 0 or new_y - margin > height):
+        print(f"Mask leaving frame at position ({new_x}, {new_y})")
         mask.is_active = False
     else:
         # Update position
@@ -134,16 +123,6 @@ def translate_mask(mask: np.ndarray, dx: int, dy: int,
                   frame_size: Tuple[int, int]) -> np.ndarray:
     """
     Translate a mask by (dx, dy) pixels while keeping it within frame bounds.
-    Now with improved boundary handling and smooth translation.
-    
-    Args:
-        mask: Binary mask array
-        dx: Horizontal translation
-        dy: Vertical translation
-        frame_size: (height, width) of frame
-        
-    Returns:
-        Translated binary mask array
     """
     height, width = frame_size
     
@@ -163,6 +142,7 @@ def translate_mask(mask: np.ndarray, dx: int, dy: int,
     )
     
     return translated > 0
+
 
 def check_mask_collision(mask1: PhysicsMask, mask2: PhysicsMask) -> bool:
     """
