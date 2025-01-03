@@ -56,7 +56,7 @@ def generate_color(index: int) -> np.ndarray:
     
     rgb = np.array(colorsys.hsv_to_rgb(hue, saturation, value)) * 255
     variation = np.random.uniform(-20, 20, 3)
-    rgb = np.clip(rgb + variation, 0, 255)
+    rgb = np.clip(rgb + variation, 20, 155)
     
     color = rgb.astype(np.uint8)
     mask_colors[index] = color

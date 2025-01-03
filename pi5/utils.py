@@ -10,11 +10,11 @@ import traceback
 import shared_state as state
 
 # Constants for optimization
-INPUT_SIZE = (320,180)  # Camera capture size
-PROCESS_SIZE = (320, 180)  # Processing size
+INPUT_SIZE = (640, 320)  # Camera capture size
+PROCESS_SIZE = (80, 45)  # Processing size
 MAX_MASKS = 3  # Maximum number of masks to process
 VISUALIZATION_SCALE = 1.0  # No downscaling for visualization
-POINTS_PER_SIDE = 8  # Points for coverage
+POINTS_PER_SIDE = 4  # Points for coverage
 TARGET_FPS = 20  # Target FPS for processing
 DEBUG_FEATURES = True  # Enable feature point visualization
 
@@ -82,7 +82,7 @@ def create_debug_frame(frame, curr_points, prev_points, motion_vectors=None, mot
         for point in curr_points:
             x, y = point.ravel()
             # Green circle for current points
-            cv2.circle(debug_frame, (int(x), int(y)), 2, (0, 255, 0), -1)
+            cv2.circle(debug_frame, (int(x), int(y)), 2, (233, 255, 187), -1)
     
     # Draw motion tracking information
     if prev_points is not None and motion_vectors is not None:
@@ -93,20 +93,20 @@ def create_debug_frame(frame, curr_points, prev_points, motion_vectors=None, mot
             # Only draw significant motion
             if np.sqrt(motion[0]**2 + motion[1]**2) > MIN_MOTION_DISTANCE:
                 # Red circle for previous position
-                cv2.circle(debug_frame, (int(x1), int(y1)), 2, (0, 0, 255), -1)
+                cv2.circle(debug_frame, (int(x1), int(y1)), 2, (196, 17, 84), -1)
                 # Yellow line showing motion vector
                 cv2.line(debug_frame, (int(x1), int(y1)), (int(x2), int(y2)), 
-                        (0, 255, 255), 1)
+                        (149, 125, 21), 1)
     
     # Draw motion areas if available
     if motion_areas is not None:
         # Blue contours for motion areas
-        cv2.drawContours(debug_frame, motion_areas, -1, (255, 0, 0), 1)
+        cv2.drawContours(debug_frame, motion_areas, -1, (189,70, 50), 1)
     
     # Add feature count to debug frame
     if curr_points is not None:
-        cv2.putText(debug_frame, f"Features: {len(curr_points)}", (10, 20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv2.putText(debug_frame, f"sunRoomfinal_Final4.2025.{len(curr_points)}.mp4", (40, 40),
+                   cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 0), 1)
     
     return debug_frame
 
@@ -298,9 +298,9 @@ def generate_vibrant_colors(n):
         hue = (i * golden_ratio) % 1.0
         saturation = np.random.uniform(*saturation_range)
         value = np.random.uniform(*value_range)
-        rgb = np.array(colorsys.hsv_to_rgb(hue, saturation, value)) * 255
+        rgb = np.array(colorsys.hsv_to_rgb(hue, saturation, value)) * 155
         variation = np.random.uniform(-20, 20, 3)
-        rgb = np.clip(rgb + variation, 0, 255)
+        rgb = np.clip(rgb + variation, 40, 155)
         colors.append(rgb.astype(np.uint8))
 
     np.random.shuffle(colors)
@@ -391,7 +391,7 @@ def generate_visualization(frame, masks, scores):
                 # For stable masks, convert to black and white
                 if flag == 'stable':
                     overlay = np.zeros_like(frame)
-                    overlay[mask_resized] = [255, 255, 255]  # White
+                    overlay[mask_resized] = [255, 255, 155]  # White
                 else:
                     overlay = np.zeros_like(frame)
                     overlay[mask_resized] = color
