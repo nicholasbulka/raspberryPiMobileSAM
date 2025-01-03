@@ -48,10 +48,10 @@ STABILITY_COUNT_THRESHOLD = 2     # How many stable iterations before flagging
 MASK_THRESHOLD_ADJUSTMENT = -0.4  # Adjustment to MobileSAM threshold
 
 # Constants for optimization
-INPUT_SIZE = (320,180)  # Camera capture size
-PROCESS_SIZE = (320, 180)  # Processing size
+INPUT_SIZE = (640,360)  # Camera capture size
+PROCESS_SIZE = (640,360)  # Processing size
 POINTS_PER_SIDE = 8
 
 # Physics parameters
 MOTION_FORCE_SCALE = 2.0  # Scale factor for motion forces
-MIN_MOTION_THRESHOLD = 0.2  # Minimum motion magnitude to trigger physics
+MIN_MOTION_THRESHOLD = 0.65  # Minimum motion magnitude to trigger physics

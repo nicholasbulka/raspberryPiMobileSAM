@@ -5,7 +5,7 @@ from typing import Tuple, Optional
 
 def detect_motion_collision(mask: PhysicsMask, flow: np.ndarray, 
                           magnitude: np.ndarray, angle: np.ndarray,
-                          threshold: float = 0.8) -> Tuple[float, float]:  # Increased threshold
+                          threshold: float = 0.65) -> Tuple[float, float]:  # Increased threshold
     """
     Detect collision between motion and a specific mask, returning force vectors.
     Now with enhanced individual mask collision detection and higher threshold.

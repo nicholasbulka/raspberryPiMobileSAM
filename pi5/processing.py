@@ -77,41 +77,111 @@ def capture_frames():
         if state.picam2 is not None:
             state.picam2.stop()
 
-def inference_loop(sam):
-    """Run continuous mask inference on processed frames."""
-    h, w = (180, 320)
+def separate_objects(masks, scores, min_size=100, min_confidence=0.5, iou_threshold=0.5):
+    """
+    Separate individual objects from SAM's mask proposals.
     
-    points_per_side = state.POINTS_PER_SIDE
+    Args:
+        masks: Array of mask proposals from SAM (N, H, W)
+        scores: Confidence scores for each mask
+        min_size: Minimum object size in pixels
+        min_confidence: Minimum confidence score to consider
+        iou_threshold: Threshold for considering masks as the same object
+    
+    Returns:
+        List of unique object masks
+    """
+    if masks is None or len(masks) == 0:
+        return []
+        
+    # Get initial mask dimensions
+    N = masks.shape[0]
+    object_masks = []
+    used_masks = set()
+    
+    # Sort masks by score for priority
+    mask_indices = np.argsort(scores[0])[::-1]
+    
+    for i in mask_indices:
+        if i in used_masks or scores[0][i] < min_confidence:
+            continue
+            
+        current_mask = masks[0][i]
+        
+        # Check if mask is big enough
+        if np.sum(current_mask) < min_size:
+            continue
+            
+        # Check if this mask significantly overlaps with any existing object
+        is_unique = True
+        for existing_mask in object_masks:
+            intersection = np.logical_and(current_mask, existing_mask).sum()
+            union = np.logical_or(current_mask, existing_mask).sum()
+            iou = intersection / union if union > 0 else 0
+            
+            if iou > iou_threshold:
+                is_unique = False
+                break
+                
+        if is_unique:
+            object_masks.append(current_mask)
+            used_masks.add(i)
+            
+    return object_masks
+
+def inference_loop(sam):
+    """Run continuous mask inference with enhanced debugging."""
+    print("Starting inference loop with debug logging")
+    h, w = (120, 213)
+    
+    # Create grid points (6x6 grid = 36 points)
+    points_per_side = 6
     x = np.linspace(0, w, points_per_side)
     y = np.linspace(0, h, points_per_side)
     xv, yv = np.meshgrid(x, y)
-    fixed_points = np.stack([xv.flatten(), yv.flatten()], axis=1) 
+    fixed_points = np.stack([xv.flatten(), yv.flatten()], axis=1)
     
+    # ONNX inputs setup
     onnx_coord = np.concatenate([fixed_points, np.array([[0.0, 0.0]])], axis=0)[None, :, :]
     onnx_label = np.concatenate([np.ones(len(fixed_points)), np.array([-1])], axis=0)[None, :].astype(np.float32)
     onnx_mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
     onnx_has_mask_input = np.zeros(1, dtype=np.float32)
 
+    target_frame_time = 1/20
+    last_inference_time = time.time()
+    frame_counter = 0
+
     while True:
         try:
+            current_time = time.time()
+            if current_time - last_inference_time < target_frame_time:
+                time.sleep(target_frame_time - (current_time - last_inference_time))
+                continue
+                
+            frame_counter += 1
+            if frame_counter % 30 == 0:  # Log every 30 frames
+                print(f"\n=== Frame {frame_counter} ===")
+            
             with state.frame_lock:
                 if state.current_frame is None:
                     time.sleep(0.1)
                     continue
                 frame_to_process = state.current_frame.copy()
+                print(f"Got frame: shape={frame_to_process.shape}")
 
-            t_resize_start = time.time()
+            # Prepare frame
             frame_small = cv2.resize(frame_to_process, (w, h), interpolation=cv2.INTER_LINEAR)
             frame_rgb = cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB)
-            perf_stats['resize_times'].append(time.time() - t_resize_start)
-
-            t_embed_start = time.time()
+            
+            # Run SAM inference
             state.predictor.set_image(frame_rgb)
             state.image_embedding = state.predictor.get_image_embedding().cpu().numpy()
-            embed_time = time.time() - t_embed_start
-            perf_stats['embedding_times'].append(embed_time)
 
-            onnx_coord_frame = state.predictor.transform.apply_coords(onnx_coord, frame_small.shape[:2]).astype(np.float32)
+            onnx_coord_frame = state.predictor.transform.apply_coords(
+                onnx_coord, 
+                frame_small.shape[:2]
+            ).astype(np.float32)
+            
             ort_inputs = {
                 "image_embeddings": state.image_embedding,
                 "point_coords": onnx_coord_frame,
@@ -121,57 +191,90 @@ def inference_loop(sam):
                 "orig_im_size": np.array(frame_small.shape[:2], dtype=np.float32)
             }
             
-            t_inference_start = time.time()
             print("Running ONNX inference...")
-            masks, scores, low_res_logits = state.ort_session.run(None, ort_inputs)
-            
+            masks, scores, _ = state.ort_session.run(None, ort_inputs)
             masks = masks > (state.predictor.model.mask_threshold + state.MASK_THRESHOLD_ADJUSTMENT)
-            print(f"ONNX inference complete. Masks shape: {masks.shape}, Scores shape: {scores.shape}")
+            
+            print(f"Got masks: shape={masks.shape}, scores shape={scores.shape}")
+            if masks is not None:
+                print(f"Number of masks > 0.5 confidence: {np.sum(scores[0] > 0.5)}")
 
-            inference_time = time.time() - t_inference_start
-            perf_stats['inference_times'].append(inference_time)
-
-            if masks is not None and len(masks) > 0:
-                top_mask_indices = np.argsort(scores[0])[-2:]
-                print(f"Selected top {len(top_mask_indices)} masks")
+            # Find the best non-overlapping masks
+            object_masks = []
+            used_indices = set()
+            
+            # Sort masks by confidence
+            mask_indices = np.argsort(scores[0])[::-1]
+            
+            for idx in mask_indices:
+                if scores[0][idx] < 0.5:  # Skip low confidence masks
+                    continue
+                    
+                current_mask = masks[0][idx]
+                mask_area = np.sum(current_mask)
                 
+                if mask_area < 100:  # Skip tiny masks
+                    continue
+                    
+                # Check if this mask overlaps significantly with existing masks
+                is_unique = True
+                for existing_mask in object_masks:
+                    intersection = np.logical_and(current_mask, existing_mask).sum()
+                    union = np.logical_or(current_mask, existing_mask).sum()
+                    iou = intersection / union if union > 0 else 0
+                    
+                    if iou > 0.5:  # If significant overlap
+                        is_unique = False
+                        break
+                
+                if is_unique:
+                    object_masks.append(current_mask)
+                    used_indices.add(idx)
+                    
+                    if len(object_masks) >= 5:  # Limit to 5 objects for performance
+                        break
+            
+            print(f"Found {len(object_masks)} unique objects")
+
+            if object_masks:
                 frame_height, frame_width = frame_to_process.shape[:2]
                 physics_masks = []
                 
-                for mask_idx in top_mask_indices:
-                    mask = masks[0][mask_idx]
-                    print(f"Processing mask {mask_idx}: shape before resize={mask.shape}")
+                # Process each unique object mask
+                for i, object_mask in enumerate(object_masks):
+                    # Resize mask to full frame size
                     mask_resized = cv2.resize(
-                        mask.astype(np.uint8),
+                        object_mask.astype(np.uint8),
                         (frame_width, frame_height),
                         interpolation=cv2.INTER_NEAREST
                     ).astype(bool)
-                    print(f"Mask {mask_idx}: shape after resize={mask_resized.shape}")
                     
-                    # Create PhysicsMask object instead of storing raw array
-                    physics_mask = create_physics_mask(
-                        mask_resized,
-                        frame_to_process.shape[:2],
-                        mass=1.0,
-                        friction=0.95
-                    )
-                    physics_masks.append(physics_mask)
+                    # Get mask properties
+                    y_indices, x_indices = np.where(mask_resized)
+                    if len(x_indices) > 0 and len(y_indices) > 0:
+                        # Create physics mask
+                        physics_mask = create_physics_mask(
+                            mask_resized,
+                            frame_to_process.shape[:2],
+                            mass=1.0,
+                            friction=0.95
+                        )
+                        physics_masks.append(physics_mask)
                 
-                # Update mask tracking with PhysicsMask objects
-                update_mask_tracking(physics_masks)
+                print(f"Created {len(physics_masks)} physics masks")
                 
+                # Update shared state
                 with state.frame_lock:
                     state.current_masks = physics_masks
-                    state.mask_scores = scores[0][top_mask_indices]
-                    print(f"Updated current masks: {len(state.current_masks)} masks")
-                    print(f"Current mask flags: {state.mask_flags}")
-                    print(f"Stability counters: {state.mask_stability_counters}")
-                    print(f"Mask change scores: {state.mask_change_scores}")
+                    state.mask_scores = [1.0] * len(physics_masks)
+                    print(f"Updated shared state with {len(state.current_masks)} masks")
             else:
-                print("No masks detected")
                 with state.frame_lock:
                     state.current_masks = []
                     state.mask_scores = None
+                    print("No masks found this frame")
+
+            last_inference_time = time.time()
 
         except Exception as e:
             print(f"Error in inference loop: {str(e)}")
