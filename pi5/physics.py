@@ -195,18 +195,40 @@ def resolve_mask_collisions(masks: List[PhysicsMask]) -> None:
     Args:
         masks: List of PhysicsMask objects
     """
-    for i in range(len(masks)):
-        for j in range(i + 1, len(masks)):
-            if not masks[i].is_active or not masks[j].is_active:
+    if not masks:
+        return
+
+    num_masks = len(masks)
+    if num_masks < 2:
+        return
+
+    for i in range(num_masks):
+        # Ensure i is an integer
+        i = int(i)
+        if not (0 <= i < num_masks):
+            continue
+
+        mask1 = masks[i]
+        if not mask1.is_active:
+            continue
+
+        for j in range(i + 1, num_masks):
+            # Ensure j is an integer
+            j = int(j)
+            if not (0 <= j < num_masks):
                 continue
-                
-            if check_mask_collision(masks[i], masks[j]):
+
+            mask2 = masks[j]
+            if not mask2.is_active:
+                continue
+
+            if check_mask_collision(mask1, mask2):
                 # Calculate collision normal
-                dx = masks[j].position[0] - masks[i].position[0]
-                dy = masks[j].position[1] - masks[i].position[1]
-                distance = np.sqrt(dx * dx + dy * dy)
+                dx = float(mask2.position[0] - mask1.position[0])
+                dy = float(mask2.position[1] - mask1.position[1])
+                distance = float(np.sqrt(dx * dx + dy * dy))
                 
-                if distance == 0:  # Avoid division by zero
+                if distance < 0.0001:  # Avoid division by zero
                     continue
                     
                 # Normalize collision vector
@@ -214,11 +236,11 @@ def resolve_mask_collisions(masks: List[PhysicsMask]) -> None:
                 ny = dy / distance
                 
                 # Calculate relative velocity
-                rvx = masks[i].dx - masks[j].dx
-                rvy = masks[i].dy - masks[j].dy
+                rvx = float(mask1.dx - mask2.dx)
+                rvy = float(mask1.dy - mask2.dy)
                 
                 # Calculate relative velocity along normal
-                rel_vel_normal = rvx * nx + rvy * ny
+                rel_vel_normal = float(rvx * nx + rvy * ny)
                 
                 # Do not resolve if objects are separating
                 if rel_vel_normal > 0:
@@ -228,19 +250,28 @@ def resolve_mask_collisions(masks: List[PhysicsMask]) -> None:
                 restitution = 0.8
                 
                 # Calculate collision impulse
-                j = -(1 + restitution) * rel_vel_normal
-                j /= 1/masks[i].mass + 1/masks[j].mass
+                j = -(1.0 + restitution) * rel_vel_normal
+                total_inverse_mass = float(1.0/mask1.mass + 1.0/mask2.mass)
+                if total_inverse_mass <= 0:
+                    continue
+                    
+                j /= total_inverse_mass
                 
                 # Apply impulse to both masks
-                masks[i].dx -= (j * nx) / masks[i].mass
-                masks[i].dy -= (j * ny) / masks[i].mass
-                masks[j].dx += (j * nx) / masks[j].mass
-                masks[j].dy += (j * ny) / masks[j].mass
+                impulse_x1 = float(-(j * nx) / mask1.mass)
+                impulse_y1 = float(-(j * ny) / mask1.mass)
+                impulse_x2 = float((j * nx) / mask2.mass)
+                impulse_y2 = float((j * ny) / mask2.mass)
+                
+                mask1.dx += impulse_x1
+                mask1.dy += impulse_y1
+                mask2.dx += impulse_x2
+                mask2.dy += impulse_y2
                 
                 # Ensure velocities are within bounds
-                for mask in [masks[i], masks[j]]:
-                    mask.dx = np.clip(mask.dx, -MAX_VELOCITY, MAX_VELOCITY)
-                    mask.dy = np.clip(mask.dy, -MAX_VELOCITY, MAX_VELOCITY)
+                for mask in [mask1, mask2]:
+                    mask.dx = float(np.clip(mask.dx, -MAX_VELOCITY, MAX_VELOCITY))
+                    mask.dy = float(np.clip(mask.dy, -MAX_VELOCITY, MAX_VELOCITY))
 
 def calculate_mask_energy(mask: PhysicsMask) -> float:
     """
@@ -253,10 +284,10 @@ def calculate_mask_energy(mask: PhysicsMask) -> float:
         float: Total energy of the mask
     """
     # Calculate kinetic energy (KE = 1/2 * m * v^2)
-    velocity_squared = mask.dx * mask.dx + mask.dy * mask.dy
-    kinetic_energy = 0.5 * mask.mass * velocity_squared
+    velocity_squared = float(mask.dx * mask.dx + mask.dy * mask.dy)
+    kinetic_energy = 0.5 * float(mask.mass) * velocity_squared
     
     # Calculate potential energy (simplified, based on height)
-    potential_energy = mask.mass * 9.81 * mask.position[1]  # g = 9.81 m/s^2
+    potential_energy = float(mask.mass) * 9.81 * float(mask.position[1])
     
-    return kinetic_energy + potential_energy
+    return float(kinetic_energy + potential_energy)
