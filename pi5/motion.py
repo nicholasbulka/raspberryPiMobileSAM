@@ -3,12 +3,19 @@ import numpy as np
 import time
 import traceback
 from colors import color_scheme
-from physics import detect_motion_collision, update_mask_physics, translate_mask
+from physics import (
+    detect_motion_collision,
+    update_mask_physics,
+    translate_mask,
+    resolve_mask_collisions,
+    MOTION_AREA_THRESHOLD
+)
 from mask_types import PhysicsMask
 from utils import update_performance_stats
 import shared_state as state
+from typing import List, Tuple, Optional
 
-# Dense optical flow parameters for Farneback algorithm
+# Dense optical flow parameters
 FLOW_PARAMS = {
     'pyr_scale': 0.5,     # Pyramid scale between levels
     'levels': 3,          # Number of pyramid levels
@@ -19,70 +26,94 @@ FLOW_PARAMS = {
     'flags': cv2.OPTFLOW_FARNEBACK_GAUSSIAN
 }
 
-def detect_motion(current_frame, previous_frame):
+# Motion visualization parameters
+FLOW_SCALE = 1.5         # Scale factor for flow visualization
+MIN_FLOW_MAGNITUDE = 0.5  # Minimum flow magnitude to visualize
+FLOW_COLOR_SCALE = 15    # Scale factor for flow colors
+
+def detect_motion(current_frame: np.ndarray, previous_frame: np.ndarray) -> Tuple[list, np.ndarray, float]:
     """
-    Detect motion and update physics for any masks.
+    Enhanced motion detection with improved physics handling.
+    
+    Args:
+        current_frame: Current video frame
+        previous_frame: Previous video frame
+        
+    Returns:
+        Tuple of (motion contours, debug visualization, motion intensity)
     """
-    # Get dense optical flow data
+    # Get dense optical flow
     flow, magnitude, angle, flow_vis, motion_intensity = detect_motion_dense(
-        current_frame, previous_frame
+        current_frame,
+        previous_frame
     )
     
     if flow is None:
         return None, current_frame, 0.0
-        
+    
     try:
-        # Create motion contours from magnitude
+        # Create motion mask
         motion_mask = magnitude > state.MIN_MOTION_THRESHOLD
         motion_mask = motion_mask.astype(np.uint8) * 255
         
-        # Find contours in the motion mask
+        # Find motion contours
         contours, _ = cv2.findContours(
             motion_mask,
             cv2.RETR_EXTERNAL,
             cv2.CHAIN_APPROX_SIMPLE
         )
         
-        # Update physics for all active masks
+        # Update physics for active masks
         frame_size = current_frame.shape[:2]
         active_masks = []
         
         with state.frame_lock:
-            for physics_mask in state.current_masks:
-                if not physics_mask.is_active:
-                    continue
+            if state.current_masks:
+                # Resolve collisions between masks first
+                resolve_mask_collisions(state.current_masks)
+                
+                # Update each mask's physics
+                for physics_mask in state.current_masks:
+                    if not physics_mask.is_active:
+                        continue
                     
-                # Detect collision with motion
-                dx, dy = detect_motion_collision(
-                    physics_mask, 
-                    flow, 
-                    magnitude, 
-                    angle,
-                    threshold=state.MIN_MOTION_THRESHOLD
-                )
-                
-                # Update velocities based on detected motion
-                physics_mask.dx += dx * state.MOTION_FORCE_SCALE
-                physics_mask.dy += dy * state.MOTION_FORCE_SCALE
-                
-                # Update position and check if still active
-                update_mask_physics(physics_mask, frame_size)
-                
-                # Translate mask data based on new position
-                if physics_mask.is_active:
-                    physics_mask.mask = translate_mask(
-                        physics_mask.mask,
-                        int(physics_mask.dx),
-                        int(physics_mask.dy),
-                        frame_size
+                    # Calculate motion forces
+                    dx, dy = detect_motion_collision(
+                        physics_mask,
+                        flow,
+                        magnitude,
+                        angle,
+                        threshold=state.MIN_MOTION_THRESHOLD
                     )
-                    active_masks.append(physics_mask)
+                    
+                    # Update velocities
+                    physics_mask.dx += dx
+                    physics_mask.dy += dy
+                    
+                    # Update position and check bounds
+                    update_mask_physics(physics_mask, frame_size)
+                    
+                    # Translate mask if still active
+                    if physics_mask.is_active:
+                        physics_mask.mask = translate_mask(
+                            physics_mask.mask,
+                            int(physics_mask.dx),
+                            int(physics_mask.dy),
+                            frame_size
+                        )
+                        active_masks.append(physics_mask)
             
-            # Update state with only active masks
+            # Update state with active masks
             state.current_masks = active_masks
         
-        # Use flow visualization as debug frame
-        debug_frame = flow_vis
+        # Create debug visualization
+        debug_frame = create_motion_visualization(
+            current_frame,
+            flow,
+            magnitude,
+            angle,
+            motion_mask
+        )
         
         return contours, debug_frame, motion_intensity
         
@@ -91,33 +122,51 @@ def detect_motion(current_frame, previous_frame):
         traceback.print_exc()
         return None, current_frame, 0.0
 
-def detect_motion_dense(current_frame, previous_frame):
-    """Detect dense optical flow between frames."""
+def detect_motion_dense(current_frame: np.ndarray,
+                       previous_frame: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+    """
+    Calculate dense optical flow between frames with improved accuracy.
+    
+    Args:
+        current_frame: Current video frame
+        previous_frame: Previous video frame
+        
+    Returns:
+        Tuple of (flow, magnitude, angle, visualization, motion_intensity)
+    """
     if previous_frame is None:
         return None, None, None, current_frame, 0.0
     
     try:
         t_start = time.time()
         
-        # Convert frames to grayscale for flow calculation
+        # Convert frames to grayscale
         curr_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
         prev_gray = cv2.cvtColor(previous_frame, cv2.COLOR_BGR2GRAY)
         
         # Calculate dense optical flow
         flow = cv2.calcOpticalFlowFarneback(
-            prev_gray, 
-            curr_gray, 
+            prev_gray,
+            curr_gray,
             None,
             **FLOW_PARAMS
         )
         
-        # Calculate magnitude and angle of flow vectors
-        magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+        # Calculate magnitude and angle
+        magnitude, angle = cv2.cartToPolar(
+            flow[..., 0],
+            flow[..., 1],
+            angleInDegrees=True
+        )
         
-        # Create artistic visualization
-        flow_vis = create_flow_visualization(current_frame, magnitude, angle)
+        # Create artistic flow visualization
+        flow_vis = create_flow_visualization(
+            current_frame,
+            magnitude,
+            angle
+        )
         
-        # Calculate overall motion intensity
+        # Calculate motion intensity
         motion_intensity = np.mean(magnitude)
         
         update_performance_stats('flow_times', time.time() - t_start)
@@ -125,121 +174,100 @@ def detect_motion_dense(current_frame, previous_frame):
         return flow, magnitude, angle, flow_vis, motion_intensity
         
     except Exception as e:
-        print(f"Error in motion detection: {str(e)}")
+        print(f"Error in dense motion detection: {str(e)}")
         traceback.print_exc()
         return None, None, None, current_frame, 0.0
 
-def create_flow_visualization(frame, magnitude, angle):
+def create_flow_visualization(frame: np.ndarray,
+                            magnitude: np.ndarray,
+                            angle: np.ndarray) -> np.ndarray:
     """
-    Create an artistic visualization of the optical flow field by mapping
-    motion direction to color hue and motion magnitude to brightness.
-    This provides an intuitive way to see how objects are moving in the scene.
+    Create enhanced visualization of optical flow field.
     
     Args:
-        frame: Original frame
+        frame: Original video frame
         magnitude: Motion magnitude array
         angle: Motion angle array
+        
+    Returns:
+        Flow visualization frame
     """
-    # Create HSV representation of flow
+    # Create HSV representation
     hsv = np.zeros_like(frame)
-    hsv[..., 1] = 255  # Full saturation
+    hsv[..., 1] = 255
     
-    # Map angle to hue (convert to degrees, scale to 0-180)
-    hsv[..., 0] = angle * 180 / np.pi / 2
+    # Map angle to hue
+    hsv[..., 0] = angle / 2.0
     
-    # Map magnitude to value/brightness
-    normalized_magnitude = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)
+    # Map magnitude to value with enhanced contrast
+    normalized_magnitude = cv2.normalize(
+        magnitude,
+        None,
+        0,
+        255,
+        cv2.NORM_MINMAX
+    )
     hsv[..., 2] = normalized_magnitude
     
-    # Convert to BGR and blend with original frame
+    # Convert to BGR and blend with original
     flow_vis = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-    result = cv2.addWeighted(frame, 0.7, flow_vis, 0.3, 0)
+    
+    # Add motion trails
+    result = cv2.addWeighted(
+        frame,
+        0.7,
+        flow_vis,
+        0.3,
+        0
+    )
     
     return result
 
-def apply_motion_effects(frame, masks, flow, magnitude, angle):
+def create_motion_visualization(frame: np.ndarray,
+                              flow: np.ndarray,
+                              magnitude: np.ndarray,
+                              angle: np.ndarray,
+                              motion_mask: np.ndarray) -> np.ndarray:
     """
-    Apply artistic effects where motion intersects with masks. This function
-    creates dynamic visual effects that respond to the motion in the scene.
-    Effects include color pulsing, motion-based displacement, and sparkles.
+    Create comprehensive motion visualization with trails and vectors.
     
     Args:
-        frame: Original frame
-        masks: List of mask arrays
+        frame: Original video frame
         flow: Optical flow data
         magnitude: Motion magnitude array
         angle: Motion angle array
+        motion_mask: Binary motion mask
+        
+    Returns:
+        Debug visualization frame
     """
-    if masks is None or len(masks) == 0:
-        return frame
+    # Start with flow visualization
+    result = create_flow_visualization(frame, magnitude, angle)
     
-    try:
-        result = frame.copy()
-        height, width = frame.shape[:2]
+    # Draw motion vectors
+    step = 16  # Grid size for vector visualization
+    h, w = frame.shape[:2]
+    
+    y, x = np.mgrid[step//2:h:step, step//2:w:step].reshape(2, -1).astype(int)
+    fx = flow[y, x, 0]
+    fy = flow[y, x, 1]
+    
+    # Filter out small movements
+    mask = magnitude[y, x] > MIN_FLOW_MAGNITUDE
+    
+    # Draw arrows for significant motion
+    for i, (start_point, fx_i, fy_i) in enumerate(zip(zip(x[mask], y[mask]),
+                                                     fx[mask], fy[mask])):
+        end_point = (int(start_point[0] + fx_i*FLOW_SCALE),
+                    int(start_point[1] + fy_i*FLOW_SCALE))
         
-        # Create motion intensity map
-        motion_intensity = cv2.normalize(magnitude, None, 0, 1, cv2.NORM_MINMAX)
-        time_factor = np.sin(time.time() * EFFECT_PULSE_RATE) * 0.5 + 0.5
-        
-        for mask_idx, mask in enumerate(masks):
-            # Resize mask and find motion intersection
-            mask_resized = resize_mask(mask, (width, height))
-            intersection = mask_resized & (motion_intensity > MOTION_THRESHOLD)
-            
-            if np.any(intersection):
-                # Generate effect color from our scheme
-                effect_color = color_scheme.generate_from_base(
-                    int(time.time() * 10) + mask_idx
-                )
-                
-                # Apply time-based effects
-                if time_factor > 0.7:
-                    # Pulsing color effect
-                    result[intersection] = effect_color
-                elif time_factor > 0.3:
-                    # Motion-based displacement
-                    apply_displacement_effect(
-                        result, frame, intersection, flow,
-                        height, width
-                    )
-                else:
-                    # Sparkle effect
-                    apply_sparkle_effect(
-                        result, intersection, magnitude
-                    )
-        
-        return result
-        
-    except Exception as e:
-        print(f"Error applying motion effects: {str(e)}")
-        traceback.print_exc()
-        return frame
-
-def apply_displacement_effect(result, frame, intersection, flow, height, width):
-    """
-    Create a displacement effect by moving pixels based on the optical flow.
-    This creates a dynamic warping effect in areas with motion.
-    """
-    y_coords, x_coords = np.where(intersection)
-    for y, x in zip(y_coords, x_coords):
-        # Calculate displacement based on flow
-        flow_x = flow[y, x, 0]
-        flow_y = flow[y, x, 1]
-        new_x = int(x + flow_x * DISPLACEMENT_SCALE)
-        new_y = int(y + flow_y * DISPLACEMENT_SCALE)
-        
-        # Ensure coordinates stay within frame bounds
-        new_x = np.clip(new_x, 0, width - 1)
-        new_y = np.clip(new_y, 0, height - 1)
-        
-        # Move pixels according to flow
-        result[y, x] = frame[new_y, new_x]
-
-def apply_sparkle_effect(result, intersection, magnitude):
-    """
-    Create a sparkle effect by randomly lighting up pixels based on 
-    motion magnitude. Areas with more motion get more sparkles.
-    """
-    sparkle_prob = SPARKLE_PROBABILITY * magnitude[intersection]
-    sparkle_mask = np.random.random(sparkle_prob.shape) < sparkle_prob
-    result[intersection][sparkle_mask] = [255, 255, 255]
+        cv2.arrowedLine(
+            result,
+            (int(start_point[0]), int(start_point[1])),
+            end_point,
+            (0, 255, 0),
+            1,
+            tipLength=0.2
+        )
+    
+    return result
